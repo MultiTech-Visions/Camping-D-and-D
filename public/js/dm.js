@@ -431,9 +431,18 @@
       mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:10px;height:10px;margin:-5px;border-radius:50%;background:${TOKEN_DOT[t.kind]};border:2px solid ${selected ? 'var(--ember)' : '#000'};pointer-events:none;z-index:2"></div>`));
     }
 
-    // camera aim = an orange viewfinder frame, deliberately NOT dot-shaped so
-    // it can't be mistaken for a token
-    mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+    // What the projector is actually showing: the real viewport rectangle,
+    // sized from the display's reported screen ÷ zoom, rotated with the
+    // camera. Falls back to a small frame if no display is connected yet.
+    const vp = snap.display_viewport;
+    if (vp) {
+      const wPct = (vp.width / cam.zoom / map.image_w) * 100;
+      const hPct = (vp.height / cam.zoom / map.image_h) * 100;
+      mini.style.overflow = 'hidden';
+      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`));
+    } else {
+      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+    }
 
     miniImg.onclick = (ev) => {
       const r = miniImg.getBoundingClientRect();
@@ -450,11 +459,22 @@
       b.onclick = fn;
       return b;
     };
+    // Nudges are SCREEN-relative: with the map rotated 90°, "up" means up on
+    // the projector, not up in image pixels — so rotate the pan vector by the
+    // inverse of the camera rotation before applying it in image space.
+    const nudge = (sx, sy) => {
+      const th = (cam.rotation_deg * Math.PI) / 180;
+      send({
+        ...cam,
+        center_x: cam.center_x + (sx * Math.cos(th) + sy * Math.sin(th)) * pan,
+        center_y: cam.center_y + (-sx * Math.sin(th) + sy * Math.cos(th)) * pan,
+      });
+    };
     ctl.append(
-      mk('◀', () => send({ ...cam, center_x: cam.center_x - pan }), 'nudge left'),
-      mk('▲', () => send({ ...cam, center_y: cam.center_y - pan }), 'nudge up'),
-      mk('▼', () => send({ ...cam, center_y: cam.center_y + pan }), 'nudge down'),
-      mk('▶', () => send({ ...cam, center_x: cam.center_x + pan }), 'nudge right'),
+      mk('◀', () => nudge(-1, 0), 'nudge left (as seen on the projector)'),
+      mk('▲', () => nudge(0, -1), 'nudge up (as seen on the projector)'),
+      mk('▼', () => nudge(0, 1), 'nudge down (as seen on the projector)'),
+      mk('▶', () => nudge(1, 0), 'nudge right (as seen on the projector)'),
       mk('+🔎', () => send({ ...cam, zoom: cam.zoom * 1.3 }), 'zoom in'),
       mk('−🔎', () => send({ ...cam, zoom: cam.zoom / 1.3 }), 'zoom out'),
       mk('⟲', () => send({ ...cam, rotation_deg: cam.rotation_deg - 15 }), 'rotate left'),

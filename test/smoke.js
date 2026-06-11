@@ -268,6 +268,15 @@ check('camera: view-only transform with zoom rails + bookmarks', () => {
   throws(() => ops['camera.delete_bookmark']({ name: 'ambush' }));
 });
 
+check('display viewport report (for the GM minimap projection box)', () => {
+  ops['display.report_viewport']({ width: 1920, height: 1080 });
+  assert.deepStrictEqual(state.display_viewport, { width: 1920, height: 1080 });
+  const { snapshotFor } = require('../state');
+  assert.deepStrictEqual(snapshotFor('dm', null).display_viewport, { width: 1920, height: 1080 });
+  throws(() => ops['display.report_viewport']({ width: 0, height: 1080 }));
+  throws(() => ops['display.report_viewport']({ width: 1920.5, height: 1080 }));
+});
+
 check('map deactivate + delete clears camera', () => {
   ops['map.set_active']({ map_id: null });
   assert.strictEqual(state.camera, null);

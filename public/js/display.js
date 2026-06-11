@@ -188,9 +188,22 @@
   // ------------------------------------------------------------------------
   // Shared DOM chrome (both modes): turn banner, clocks, roster sidebar
   // ------------------------------------------------------------------------
-  CampfireWS.connect({
+  // Tell the server our screen size so the GM minimap can outline exactly
+  // what the projector shows. Local guard prevents report ping-pong if two
+  // displays of different sizes are connected (last reporter wins).
+  let reportedViewport = '';
+  function reportViewport() {
+    const key = `${innerWidth}x${innerHeight}`;
+    if (key === reportedViewport) return;
+    reportedViewport = key;
+    conn.action('display.report_viewport', { width: innerWidth, height: innerHeight });
+  }
+  addEventListener('resize', () => setTimeout(reportViewport, 200));
+
+  const conn = CampfireWS.connect({
     role: 'display',
     onSnapshot(snap) {
+      reportViewport();
       const mapMode = snap.map !== null;
       document.body.classList.toggle('map-mode', mapMode);
       mapRoot.classList.toggle('on', mapMode);

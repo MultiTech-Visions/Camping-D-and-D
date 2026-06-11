@@ -30,6 +30,9 @@ const state = {
   tokens: new Map(),
   camera: null,
   camera_bookmarks: [],
+  // Reported by the display client so the GM minimap can draw the exact
+  // projected rectangle. Memory-only: the display re-reports on reconnect.
+  display_viewport: null,
   game: null,
 };
 
@@ -578,6 +581,14 @@ const ops = {
     persistRuntime();
   },
 
+  // The projector tells us its screen size (on connect and resize) so the GM
+  // minimap can outline exactly what's being shown on the wall.
+  'display.report_viewport'(p) {
+    R.assertIntIn(p.width, 1, 20000, 'width');
+    R.assertIntIn(p.height, 1, 20000, 'height');
+    state.display_viewport = { width: p.width, height: p.height };
+  },
+
   'camera.save_bookmark'(p) {
     R.assert(state.camera, 'no camera to bookmark — activate a map first');
     const name = R.assertNonEmptyString(p.name, 'name');
@@ -637,6 +648,7 @@ function snapshotFor(role, charId) {
     map: activeMapRow,
     tokens: [...state.tokens.values()].map((t) => ({ ...t })),
     camera: state.camera === null ? null : { ...state.camera },
+    display_viewport: state.display_viewport === null ? null : { ...state.display_viewport },
     config: {
       STARTING_POINTS: config.STARTING_POINTS,
       CREATION_MAX: config.CREATION_MAX,
