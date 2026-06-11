@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga — How to Play</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="site-head">
+    <div class="flame">🔥</div>
+    <h1>How to Play</h1>
+    <p class="subtitle">Everything you need to know, in the time it takes a marshmallow to toast.</p>
+    <nav class="nav">
+      <a href="/">Characters</a>
+      <a href="/play">My Sheet</a>
+      <a href="/learn" class="active">How to Play</a>
+    </nav>
+  </header>
+
+  <h2>1 · What this is</h2>
+  <p>Campfire Saga is <strong>collaborative storytelling</strong>. The GM spins the tale; you say what your
+  hero tries to do; a handful of <strong>physical dice</strong> decide how it goes. There's no math homework,
+  no rulebooks to memorize, and the app never rolls for you — the dice live in a tray that gets passed
+  around the fire.</p>
+
+  <h2>2 · Making your character</h2>
+  <p>Pick a <strong>name</strong> and a <strong>one-line concept</strong> (“runaway storm-priest with a debt to pay”).
+  Then spend <strong>4 points</strong> across four attributes — <strong>max 2 in any one</strong> at creation.
+  Constitution may even be 0 if you want to be a glass cannon. Add an optional <strong>flavor label</strong>
+  (pure cosmetics — your magic might be “lightning” or “whiskey-fueled luck”) and a
+  <strong>hidden desire</strong> that only the GM ever sees.</p>
+  <p>As you raise an attribute in the builder, you'll see its <strong>green dice</strong> appear — that's not
+  decoration, that's literally your dice pool.</p>
+
+  <h2>3 · The four attributes</h2>
+  <ul>
+    <li><strong>Brawn</strong> — muscle, force, smashing and shoving.</li>
+    <li><strong>Constitution</strong> — toughness, and your <strong>buffer</strong>: it soaks failures so your other attributes don't fray.</li>
+    <li><strong>Magic</strong> — the strange and the supernatural, whatever your flavor says it looks like.</li>
+    <li><strong>Wits</strong> — cleverness, speed of thought, noticing the thing everyone missed.</li>
+  </ul>
+  <p>The key rule: <strong>an attribute's rank is exactly how many dice you roll with it.</strong></p>
+
+  <h2>4 · Rank → dice</h2>
+  <p>Nobody starts with a yellow die. Yellows — and their mighty <strong>Triumph</strong> face — are
+  <strong>earned</strong> by raising an attribute to rank 4 or 5 through play.</p>
+  <table class="rules">
+    <tr><th>Rank</th><th>Dice you roll</th></tr>
+    <tr><td>0</td><td>none — you cannot act with this attribute</td></tr>
+    <tr><td>1</td><td><span class="die die-green">A</span></td></tr>
+    <tr><td>2</td><td><span class="die die-green">A</span><span class="die die-green">A</span></td></tr>
+    <tr><td>3</td><td><span class="die die-green">A</span><span class="die die-green">A</span><span class="die die-green">A</span></td></tr>
+    <tr><td>4</td><td><span class="die die-green">A</span><span class="die die-green">A</span><span class="die die-green">A</span><span class="die die-yellow">P</span></td></tr>
+    <tr><td>5</td><td><span class="die die-green">A</span><span class="die die-green">A</span><span class="die die-green">A</span><span class="die die-yellow">P</span><span class="die die-yellow">P</span></td></tr>
+  </table>
+  <div class="card center">
+    <h3>Try it</h3>
+    <p class="muted small">Slide a rank and watch your pool grow.</p>
+    <input type="range" id="rank-slider" min="0" max="5" value="2" style="width:80%">
+    <div style="font-size:1.2rem;margin:6px">Rank <strong id="rank-num">2</strong></div>
+    <div id="rank-dice"></div>
+  </div>
+
+  <h2>5 · How a turn works</h2>
+  <p>Go around the circle. On your turn, <strong>describe what you do</strong>. The GM names the difficulty by
+  dropping <strong>negative dice</strong> (purple, maybe red or black) into the tray; you add your attribute's
+  dice (plus any blue boosts). Roll once. Read it together. <em>The GM almost never rolls</em> — monsters
+  act through the consequences of <strong>your</strong> roll: succeed with threat and the troll still clips
+  you; fail outright and it gets its whole turn for free.</p>
+
+  <h2>6 · Reading the dice — THE cheat sheet</h2>
+  <ul>
+    <li><strong>Success vs Failure</strong> cancel 1-for-1. At least one success left over = it works. Ties fail.</li>
+    <li><strong>Advantage vs Threat</strong> cancel 1-for-1, <em>separately</em> from success/failure. You can succeed with threat, or fail with advantage.</li>
+    <li><strong>Triumph</strong> = a success <em>plus something great</em>. <strong>Despair</strong> = a failure <em>plus something terrible</em>. They never cancel each other.</li>
+  </ul>
+
+  <h2>7 · The dice, one by one</h2>
+  <table class="rules">
+    <tr><th>Image</th><th>Name</th><th>Color</th><th>What it's for</th><th>Special face</th></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/green.png">DIE IMAGE: green.png — replace me</span></td>
+        <td>Ability</td><td>Green</td><td>Your base action dice — one per attribute rank.</td><td>—</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/yellow.png">DIE IMAGE: yellow.png — replace me</span></td>
+        <td>Proficiency</td><td>Yellow</td><td>Upgraded green, earned at rank 4–5.</td><td><strong>Triumph</strong> (the only die that has it)</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/blue.png">DIE IMAGE: blue.png — replace me</span></td>
+        <td>Boost</td><td>Blue</td><td>Temporary help — granted by the GM or an ally's advantage.</td><td>—</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/purple.png">DIE IMAGE: purple.png — replace me</span></td>
+        <td>Difficulty</td><td>Purple</td><td>The GM's basic opposition dice.</td><td>—</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/red.png">DIE IMAGE: red.png — replace me</span></td>
+        <td>Challenge</td><td>Red</td><td>Serious, dangerous opposition.</td><td><strong>Despair</strong> (the only die that has it)</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/dice/black.png">DIE IMAGE: black.png — replace me</span></td>
+        <td>Setback</td><td>Black</td><td>Situational penalties — darkness, mud, fear.</td><td>—</td></tr>
+  </table>
+
+  <table class="rules">
+    <tr><th>Image</th><th>Symbol</th><th>Meaning</th></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/success.png">SYMBOL: success.png — replace me</span></td><td>Success</td><td>One step toward your goal. Cancels a Failure.</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/failure.png">SYMBOL: failure.png — replace me</span></td><td>Failure</td><td>One step away. Cancels a Success.</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/advantage.png">SYMBOL: advantage.png — replace me</span></td><td>Advantage</td><td>A silver lining — spend it on perks (see below).</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/threat.png">SYMBOL: threat.png — replace me</span></td><td>Threat</td><td>A complication — the GM spends it against you, even when you succeed.</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/triumph.png">SYMBOL: triumph.png — replace me</span></td><td>Triumph</td><td>A success AND something great happens. Yellow dice only.</td></tr>
+    <tr><td><span class="img-slot" data-img="/assets/symbols/despair.png">SYMBOL: despair.png — replace me</span></td><td>Despair</td><td>A failure AND something terrible happens. Red dice only.</td></tr>
+  </table>
+
+  <h2>8 · Spending advantage</h2>
+  <p>Leftover advantage is yours to spend: make your success flashier, <strong>fill an extra clock segment</strong>
+  (every 2 advantage), or <strong>hand an ally a blue die</strong> — “I shove the lantern in the guard's eyes;
+  Mira, take a boost for your sneak past.” A single leftover advantage is a small flourish or one blue die.</p>
+
+  <h2>9 · Getting hurt</h2>
+  <p>When you <strong>fail</strong>, the attribute you used <strong>drains one rank</strong> for the rest of the
+  encounter — and since rank = dice, your best dice (the yellows!) fray first. Or you can
+  <strong>spend 1 Constitution instead</strong> to protect your specialty. An attribute at 0 can't be used at
+  all. Everything refills when the encounter ends. But if your Constitution is at 0 and you fail again…
+  that's when the GM decides what “down for the count” means.</p>
+
+  <h2>10 · Winning &amp; danger: clocks</h2>
+  <p>Forget hit points. Every obstacle is a <strong>progress clock</strong> — fill its segments with successes
+  and you win. Meanwhile the GM may run a <strong>danger clock</strong> that fills on your threats and despairs
+  (about 1 segment per 2 threats — a plain miss does <em>not</em> advance it). Most fights are a race
+  between the two. Some clocks are secret until the story reveals them…</p>
+
+  <h2>11 · Getting stronger</h2>
+  <p>Every few encounters (the GM sets the pace, usually 3) you gain <strong>+1 attribute point</strong>, up to
+  rank 5. That's the whole progression — and it's how you earn those yellow dice. No feats, no levels,
+  no homework. Now grab a marshmallow; you already know how to play.</p>
+
+  <p class="center" style="margin-top:30px"><a href="/play"><button class="primary">⚔ Make my character</button></a></p>
+</div>
+<script src="/js/learn.js"></script>
+</body>
+</html>

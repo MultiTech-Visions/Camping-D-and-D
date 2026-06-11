@@ -1,0 +1,209 @@
+/* Campfire Saga — one stylesheet for every page. Dark campsite theme, big
+   phone-friendly touch targets, no framework. */
+
+:root {
+  --bg: #14100d;
+  --bg-card: #1f1813;
+  --bg-raised: #2a2019;
+  --ink: #f3e9d8;
+  --ink-dim: #b3a48d;
+  --ember: #ff8c2e;
+  --ember-deep: #d9531e;
+  --gold: #f0b429;
+  --danger: #e25543;
+  --ok: #6fbf63;
+  --line: #3d3025;
+  --die-green: #3f9b4f;
+  --die-yellow: #e7c52a;
+  --die-blue: #3e8ed0;
+  --die-purple: #7b4fa6;
+  --die-red: #c43c34;
+  --die-black: #2b2b2e;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background:
+    radial-gradient(ellipse 90% 50% at 50% -10%, #2c1c10 0%, transparent 60%),
+    var(--bg);
+  color: var(--ink);
+  font-family: Georgia, 'Times New Roman', serif;
+  line-height: 1.45;
+  min-height: 100vh;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 880px; margin: 0 auto; padding: 14px 14px 90px; }
+
+h1, h2, h3 { font-weight: 700; letter-spacing: 0.02em; }
+h1 { color: var(--ember); text-shadow: 0 0 22px rgba(255, 140, 46, 0.35); margin: 8px 0 4px; }
+h2 { color: var(--gold); border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-top: 30px; }
+h3 { color: var(--ink); margin-bottom: 6px; }
+a { color: var(--ember); }
+.subtitle { color: var(--ink-dim); font-style: italic; margin-top: 0; }
+.muted { color: var(--ink-dim); }
+.small { font-size: 0.85em; }
+.center { text-align: center; }
+
+/* --- header / nav --- */
+.site-head { text-align: center; padding-top: 10px; }
+.site-head .flame { font-size: 2.2rem; filter: drop-shadow(0 0 12px rgba(255, 140, 46, 0.6)); }
+.nav { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+.nav a {
+  text-decoration: none; color: var(--ink-dim); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 14px; font-size: 0.9rem; background: var(--bg-card);
+}
+.nav a.active, .nav a:hover { color: var(--ember); border-color: var(--ember-deep); }
+
+/* --- cards --- */
+.card {
+  background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; margin: 12px 0; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.card.turn-active { border-color: var(--ember); box-shadow: 0 0 18px rgba(255, 140, 46, 0.35); }
+.card.is-dead { filter: grayscale(0.9); opacity: 0.6; position: relative; }
+.card.is-dead::after {
+  content: '✕'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 4rem; color: var(--danger); pointer-events: none; opacity: 0.5;
+}
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+
+/* --- buttons & inputs --- */
+button {
+  font-family: inherit; font-size: 1rem; color: var(--ink); background: var(--bg-raised);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; cursor: pointer;
+  min-height: 44px;
+}
+button:active { transform: translateY(1px); }
+button.primary { background: linear-gradient(180deg, var(--ember), var(--ember-deep)); color: #1a0d04; border: none; font-weight: 700; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button.ghost { background: transparent; }
+button.mini { min-height: 34px; padding: 4px 12px; font-size: 0.9rem; }
+button:disabled { opacity: 0.4; cursor: default; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+
+input[type="text"], input[type="number"], textarea, select {
+  font-family: inherit; font-size: 1rem; color: var(--ink); background: #150f0a;
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 100%;
+}
+textarea { min-height: 70px; resize: vertical; }
+label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.9rem; }
+.field-row { display: flex; gap: 10px; }
+.field-row > * { flex: 1; }
+
+/* --- dice icons (CSS-rendered; real art can replace later) --- */
+.die {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 7px;
+  font-family: 'Trebuchet MS', sans-serif; font-weight: 700; font-size: 0.8rem;
+  margin: 1px; color: #fff; box-shadow: inset 0 -3px 0 rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.5);
+  vertical-align: middle;
+}
+.die.lg { width: 42px; height: 42px; font-size: 1.05rem; border-radius: 9px; }
+.die-green  { background: var(--die-green); }
+.die-yellow { background: var(--die-yellow); color: #443500; }
+.die-blue   { background: var(--die-blue); }
+.die-purple { background: var(--die-purple); }
+.die-red    { background: var(--die-red); }
+.die-black  { background: var(--die-black); border: 1px solid #555; }
+.dice-pool { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 32px; }
+
+/* --- attribute rows (tracker) --- */
+.attr-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-bottom: 1px dashed var(--line); flex-wrap: wrap;
+}
+.attr-row:last-child { border-bottom: none; }
+.attr-name { width: 110px; font-weight: 700; text-transform: capitalize; }
+.attr-rank { font-size: 1.3rem; min-width: 64px; text-align: center; }
+.attr-rank .drained { color: var(--danger); }
+.attr-zero { color: var(--danger); font-weight: 700; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.stepper button { min-width: 44px; font-size: 1.2rem; font-weight: 700; }
+.stepper .val { min-width: 34px; text-align: center; font-size: 1.4rem; font-weight: 700; }
+
+/* --- condition chips --- */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip {
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 12px; font-size: 0.85rem; color: var(--ink); display: inline-flex;
+  align-items: center; gap: 6px; cursor: pointer;
+}
+.chip.on { border-color: var(--ember); color: var(--ember); }
+.chip.chip-dead.on { border-color: var(--danger); color: var(--danger); }
+.chip .x { font-weight: 700; }
+
+/* --- clocks --- */
+.clock-box { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; margin: 6px; }
+.clock-label { font-size: 0.9rem; text-align: center; max-width: 130px; }
+.clock-svg .seg { fill: #221a13; stroke: var(--line); stroke-width: 2; cursor: pointer; }
+.clock-svg .seg.filled.progress { fill: var(--ok); }
+.clock-svg .seg.filled.danger { fill: var(--danger); }
+.clock-kind { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; }
+.clock-kind.progress { color: var(--ok); }
+.clock-kind.danger { color: var(--danger); }
+.clock-secret { opacity: 0.75; outline: 1px dashed var(--gold); border-radius: 10px; padding: 4px; }
+
+/* --- HP bar (D&D) --- */
+.hp-bar { height: 22px; background: #150f0a; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; position: relative; }
+.hp-bar .fill { height: 100%; background: linear-gradient(90deg, #7a1f1f, #2f9e44); transition: width 0.3s; }
+.hp-bar .txt { position: absolute; inset: 0; display: grid; place-items: center; font-size: 0.85rem; font-weight: 700; text-shadow: 0 1px 2px #000; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(86px, 1fr)); gap: 8px; margin: 10px 0; }
+.stat-tile { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 10px; padding: 8px 4px; text-align: center; }
+.stat-tile .k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-dim); }
+.stat-tile .v { font-size: 1.4rem; font-weight: 700; }
+.stat-tile .m { font-size: 0.9rem; color: var(--gold); }
+.pips { display: inline-flex; gap: 4px; }
+.pip { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--ink-dim); display: inline-block; cursor: pointer; }
+.pip.on { background: var(--gold); border-color: var(--gold); }
+.pip.death-fail.on { background: var(--danger); border-color: var(--danger); }
+
+/* --- tabs --- */
+.tabs { display: flex; gap: 6px; margin: 14px 0; }
+.tabs button { flex: 1; border-radius: 10px 10px 0 0; border-bottom: 2px solid transparent; }
+.tabs button.active { border-bottom-color: var(--ember); color: var(--ember); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* --- banners, toasts, status --- */
+.banner {
+  background: linear-gradient(90deg, rgba(240, 180, 41, 0.18), transparent);
+  border: 1px solid var(--gold); border-radius: var(--radius); padding: 12px 14px; margin: 12px 0;
+}
+#toast {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: #3a0f0a; color: #ffd9cf; border: 1px solid var(--danger); border-radius: 10px;
+  padding: 12px 18px; max-width: 90vw; z-index: 99; display: none;
+}
+#toast.ok { background: #11290f; color: #d7f5cf; border-color: var(--ok); }
+#conn-dot {
+  position: fixed; top: 10px; right: 12px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--danger); z-index: 99; box-shadow: 0 0 8px rgba(0,0,0,0.6);
+}
+#conn-dot.on { background: var(--ok); }
+
+/* --- tables (learn page) --- */
+table.rules { border-collapse: collapse; width: 100%; margin: 12px 0; }
+table.rules th, table.rules td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: middle; }
+table.rules th { background: var(--bg-raised); color: var(--gold); }
+.img-slot {
+  width: 64px; height: 64px; display: grid; place-items: center; border: 2px dashed var(--ink-dim);
+  border-radius: 8px; font-size: 0.55rem; text-align: center; color: var(--ink-dim); padding: 2px;
+}
+.img-slot img { max-width: 60px; max-height: 60px; }
+
+/* --- display (projector) page --- */
+body.display-mode { overflow: hidden; font-size: 1.15rem; }
+.display-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; height: 100vh; padding: 18px; }
+.display-main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+.display-roster { overflow-y: auto; }
+.display-roster .card { margin: 8px 0; padding: 10px; }
+.turn-banner { font-size: 2rem; color: var(--ember); text-shadow: 0 0 24px rgba(255, 140, 46, 0.6); text-align: center; }
+#embers { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+.display-grid { position: relative; z-index: 1; }
+
+@media (max-width: 720px) {
+  .display-grid { grid-template-columns: 1fr; }
+  .attr-name { width: 90px; }
+}
