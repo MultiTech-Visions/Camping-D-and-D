@@ -11,6 +11,7 @@
     role: 'dm',
     onSnapshot(s) {
       snap = s;
+      if (mapUI.draggingViewport) return queueRender(s); // don't rebuild the minimap mid-drag
       const ae = document.activeElement;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.dataset.live !== '1') return queueRender(s);
       render();
@@ -197,6 +198,7 @@
     cellsAcross: 5,
     cellsDown: 5,
     selectedToken: null,
+    draggingViewport: false, // suppress re-renders while dragging the minimap box
   };
 
   function mapManager() {
@@ -435,19 +437,73 @@
     // sized from the display's reported screen ÷ zoom, rotated with the
     // camera. Falls back to a small frame if no display is connected yet.
     const vp = snap.display_viewport;
+    let vpBox;
     if (vp) {
       const wPct = (vp.width / cam.zoom / map.image_w) * 100;
       const hPct = (vp.height / cam.zoom / map.image_h) * 100;
       mini.style.overflow = 'hidden';
-      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`));
+      vpBox = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`);
     } else {
-      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+      vpBox = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`);
     }
+    mini.appendChild(vpBox);
 
-    miniImg.onclick = (ev) => {
+    // Tap to jump the camera, or grab the box and DRAG it — the projector
+    // follows live (throttled), and the arrows below fine-tune afterwards.
+    mini.style.touchAction = 'none';
+    let grabDX = 0, grabDY = 0, lastLiveSend = 0;
+    let dragX = cam.center_x, dragY = cam.center_y;
+    const toImage = (ev) => {
       const r = miniImg.getBoundingClientRect();
-      send({ ...cam, center_x: ((ev.clientX - r.left) / r.width) * map.image_w, center_y: ((ev.clientY - r.top) / r.height) * map.image_h });
+      return {
+        x: Math.min(Math.max(((ev.clientX - r.left) / r.width) * map.image_w, 0), map.image_w),
+        y: Math.min(Math.max(((ev.clientY - r.top) / r.height) * map.image_h, 0), map.image_h),
+      };
     };
+    const placeBox = (x, y) => {
+      vpBox.style.left = `${(x / map.image_w) * 100}%`;
+      vpBox.style.top = `${(y / map.image_h) * 100}%`;
+    };
+    mini.onpointerdown = (ev) => {
+      ev.preventDefault();
+      const p = toImage(ev);
+      // grabbing inside the box keeps your grip point; tapping outside jumps
+      const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
+      const halfH = vp ? vp.height / cam.zoom / 2 : map.image_h * 0.04;
+      if (Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
+        grabDX = dragX - p.x;
+        grabDY = dragY - p.y;
+      } else {
+        grabDX = 0;
+        grabDY = 0;
+        dragX = p.x;
+        dragY = p.y;
+        placeBox(dragX, dragY);
+      }
+      mapUI.draggingViewport = true;
+      mini.setPointerCapture(ev.pointerId);
+    };
+    mini.onpointermove = (ev) => {
+      if (!mapUI.draggingViewport) return;
+      const p = toImage(ev);
+      dragX = Math.min(Math.max(p.x + grabDX, 0), map.image_w);
+      dragY = Math.min(Math.max(p.y + grabDY, 0), map.image_h);
+      placeBox(dragX, dragY);
+      const now = Date.now();
+      if (now - lastLiveSend > 120) { // live-follow on the projector while dragging
+        lastLiveSend = now;
+        send({ ...cam, center_x: dragX, center_y: dragY });
+      }
+    };
+    const endDrag = () => {
+      if (!mapUI.draggingViewport) return;
+      mapUI.draggingViewport = false;
+      snap.camera.center_x = dragX; // optimistic — the server echo confirms
+      snap.camera.center_y = dragY;
+      send({ ...cam, center_x: dragX, center_y: dragY });
+    };
+    mini.onpointerup = endDrag;
+    mini.onpointercancel = endDrag;
     box.appendChild(mini);
     box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
       The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
