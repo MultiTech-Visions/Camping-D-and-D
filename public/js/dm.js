@@ -524,7 +524,15 @@
         n.hp = Math.max(0, n.hp - d);
       });
       heal.onclick = () => send((n) => { n.hp = Math.min(n.hp_max, n.hp + Number(amt.value)); });
-      ctl.append(amt, dmg, heal);
+      const fullHeal = el(`<button class="mini" title="full HP, death saves cleared, spell slots restored — like the campfire refill">🌙 full heal</button>`);
+      fullHeal.onclick = () => send((n) => {
+        n.hp = n.hp_max;
+        n.temp_hp = 0;
+        n.death_successes = 0;
+        n.death_failures = 0;
+        for (const slot of n.spell_slots) slot.used = 0;
+      });
+      ctl.append(amt, dmg, heal, fullHeal);
       card.appendChild(ctl);
     }
 
