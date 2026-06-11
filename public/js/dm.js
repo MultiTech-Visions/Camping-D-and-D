@@ -336,17 +336,30 @@
       });
     };
 
-    // minimap: tap anywhere to point the camera there
+    // minimap: tap anywhere to point the camera there; shows every token so
+    // the GM sees the whole board at a glance (the full render is /display)
     const mini = el(`<div style="position:relative;max-width:300px;cursor:crosshair"></div>`);
     const miniImg = el(`<img src="${map.image_path}" style="width:100%;display:block;border:1px solid var(--line);border-radius:8px" draggable="false">`);
     mini.appendChild(miniImg);
-    const dot = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:12px;height:12px;margin:-6px;border-radius:50%;border:2px solid var(--ember);background:rgba(255,140,46,.4);pointer-events:none"></div>`);
-    mini.appendChild(dot);
+
+    const TOKEN_DOT = { pc: '#3e8ed0', monster: '#c43c34', terrain: '#8a8a8a', glow: '#f0b429' };
+    for (const t of snap.tokens) {
+      const c = CampfireMap.cellCenter(map, t.col, t.row);
+      const selected = mapUI.selectedToken === t.id;
+      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:10px;height:10px;margin:-5px;border-radius:50%;background:${TOKEN_DOT[t.kind]};border:2px solid ${selected ? 'var(--ember)' : '#000'};pointer-events:none;z-index:2"></div>`));
+    }
+
+    // camera aim = an orange viewfinder frame, deliberately NOT dot-shaped so
+    // it can't be mistaken for a token
+    mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+
     miniImg.onclick = (ev) => {
       const r = miniImg.getBoundingClientRect();
       send({ ...cam, center_x: ((ev.clientX - r.left) / r.width) * map.image_w, center_y: ((ev.clientY - r.top) / r.height) * map.image_h });
     };
     box.appendChild(mini);
+    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
+      The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
 
     const pan = map.cell_size * 2;
     const ctl = el(`<div class="btn-row"></div>`);
