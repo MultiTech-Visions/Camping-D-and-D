@@ -261,17 +261,40 @@
   // Shared tracker pieces
   // =========================================================================
   function initiativeRibbon() {
-    const order = snap.initiative.order;
-    if (order.length === 0) return el(`<span></span>`);
+    const entries = snap.initiative.entries;
+    if (entries.length === 0) return el(`<span></span>`);
     const box = el(`<div class="card"><h3>Turn order</h3></div>`);
     const row = el(`<div class="chips"></div>`);
-    for (const id of order) {
-      const c = snap.characters.find((x) => x.id === id);
-      if (!c) continue;
-      const isTurn = snap.initiative.turn_char_id === id;
-      row.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${esc(c.name)}</span>`));
+    for (const e of entries) {
+      const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
+      const name = c ? c.name : e.label;
+      const isTurn = snap.initiative.turn_id === e.id;
+      row.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${c ? '' : '👹 '}${esc(name)}</span>`));
     }
     box.appendChild(row);
+    return box;
+  }
+
+  // My token on the battle map (Phase 3): arrows move me one cell in GRID space.
+  function tokenRemote(me) {
+    if (!snap.map) return el(`<span></span>`);
+    const mine = snap.tokens.find((t) => t.char_id === me.id);
+    const box = el(`<div class="card"><h3>🗺 My token</h3></div>`);
+    if (!mine) {
+      box.appendChild(el(`<p class="muted small">The GM hasn't placed your token on the map yet.</p>`));
+      return box;
+    }
+    box.appendChild(el(`<p class="muted small center">You're at (${mine.col}, ${mine.row})</p>`));
+    const pad = el(`<div style="display:grid;grid-template-columns:repeat(3,64px);gap:6px;justify-content:center"></div>`);
+    const mv = (dc, dr, txt) => {
+      const b = el(`<button style="font-size:1.3rem">${txt}</button>`);
+      b.onclick = () => conn.action('token.move', { token_id: mine.id, col: mine.col + dc, row: mine.row + dr });
+      return b;
+    };
+    pad.append(el(`<span></span>`), mv(0, -1, '▲'), el(`<span></span>`),
+      mv(-1, 0, '◀'), el(`<span></span>`), mv(1, 0, '▶'),
+      el(`<span></span>`), mv(0, 1, '▼'), el(`<span></span>`));
+    box.appendChild(pad);
     return box;
   }
 
@@ -409,6 +432,7 @@
     root.appendChild(blueCard);
 
     root.appendChild(initiativeRibbon());
+    root.appendChild(tokenRemote(me));
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));
     root.appendChild(notesSection(me));
@@ -520,6 +544,7 @@
     root.appendChild(slotCard);
 
     root.appendChild(initiativeRibbon());
+    root.appendChild(tokenRemote(me));
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));
     root.appendChild(notesSection(me));

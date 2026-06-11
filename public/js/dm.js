@@ -42,6 +42,7 @@
     root.appendChild(encounterBar());
     root.appendChild(initiativeBoard());
     root.appendChild(clocksManager());
+    root.appendChild(mapManager());
     root.appendChild(el(`<h2>The party</h2>`));
     const grid = el(`<div class="card-grid"></div>`);
     for (const c of snap.characters) grid.appendChild(charCard(c));
@@ -69,49 +70,52 @@
     return box;
   }
 
-  // --- initiative board ------------------------------------------------------
+  // --- initiative board: characters AND anything the GM types in -------------
   function initiativeBoard() {
     const box = el(`<div class="card"><h3>⚔ Initiative</h3></div>`);
-    const order = snap.initiative.order;
+    const entries = snap.initiative.entries;
 
-    if (order.length === 0) {
-      box.appendChild(el(`<p class="muted small">No one in the order yet — add characters below.</p>`));
+    if (entries.length === 0) {
+      box.appendChild(el(`<p class="muted small">Empty — add party members or type in monsters, hazards, lair actions…</p>`));
     }
-    for (let i = 0; i < order.length; i++) {
-      const c = snap.characters.find((x) => x.id === order[i]);
-      if (!c) continue;
-      const isTurn = snap.initiative.turn_char_id === c.id;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
+      const name = c ? c.name : e.label;
+      const icon = c ? (c.system === 'campfire' ? '🔥' : '🐉') : '👹';
+      const isTurn = snap.initiative.turn_id === e.id;
       const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}"></div>`);
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${esc(c.name)}</span>`));
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
       const up = el(`<button class="mini" title="move up">↑</button>`);
       const down = el(`<button class="mini" title="move down">↓</button>`);
       const turn = el(`<button class="mini ${isTurn ? 'primary' : ''}">turn</button>`);
       const out = el(`<button class="mini ghost" title="remove from initiative">✕</button>`);
       up.disabled = i === 0;
-      down.disabled = i === order.length - 1;
+      down.disabled = i === entries.length - 1;
       up.onclick = () => reorder(i, i - 1);
       down.onclick = () => reorder(i, i + 1);
-      turn.onclick = () => conn.action('initiative.set_turn', { char_id: c.id });
-      out.onclick = () => conn.action('initiative.remove', { char_id: c.id });
+      turn.onclick = () => conn.action('initiative.set_turn', { entry_id: e.id });
+      out.onclick = () => conn.action('initiative.remove', { entry_id: e.id });
       ctl.append(up, down, turn, out);
       row.appendChild(ctl);
       box.appendChild(row);
     }
 
     const foot = el(`<div class="btn-row"></div>`);
-    if (order.length > 0) {
+    if (entries.length > 0) {
       const next = el(`<button>⏭ Next turn</button>`);
       next.onclick = () => {
-        const cur = snap.initiative.turn_char_id;
-        const idx = cur === null ? -1 : order.indexOf(cur);
-        conn.action('initiative.set_turn', { char_id: order[(idx + 1) % order.length] });
+        const idx = entries.findIndex((e) => e.id === snap.initiative.turn_id);
+        conn.action('initiative.set_turn', { entry_id: entries[(idx + 1) % entries.length].id });
       };
       foot.appendChild(next);
     }
-    const addSel = el(`<select style="max-width:180px"></select>`);
+    const addSel = el(`<select style="max-width:170px"></select>`);
     for (const c of snap.characters) {
-      if (!order.includes(c.id)) addSel.appendChild(el(`<option value="${c.id}">${esc(c.name)}</option>`));
+      if (!entries.some((e) => e.char_id === c.id)) {
+        addSel.appendChild(el(`<option value="${c.id}">${esc(c.name)}</option>`));
+      }
     }
     if (addSel.children.length > 0) {
       const addBtn = el(`<button class="mini">+ add</button>`);
@@ -119,13 +123,27 @@
       foot.append(addSel, addBtn);
     }
     box.appendChild(foot);
+
+    const customRow = el(`<div class="btn-row"></div>`);
+    const customIn = el(`<input type="text" placeholder="Goblin Pack, Rockslide, The Ritual…" style="max-width:240px" maxlength="40">`);
+    const customBtn = el(`<button class="mini">👹 + anything</button>`);
+    const addCustom = () => {
+      if (customIn.value.trim()) {
+        conn.action('initiative.add_custom', { label: customIn.value.trim() });
+        customIn.value = '';
+      }
+    };
+    customBtn.onclick = addCustom;
+    customIn.onkeydown = (ev) => { if (ev.key === 'Enter') addCustom(); };
+    customRow.append(customIn, customBtn);
+    box.appendChild(customRow);
     return box;
 
     function reorder(from, to) {
-      const next = [...order];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      conn.action('initiative.reorder', { ordered_char_ids: next });
+      const ids = entries.map((e) => e.id);
+      const [moved] = ids.splice(from, 1);
+      ids.splice(to, 0, moved);
+      conn.action('initiative.reorder', { ordered_entry_ids: ids });
     }
   }
 
@@ -167,10 +185,285 @@
     return box;
   }
 
+  // --- battle map manager (Phase 3) -------------------------------------------
+  // Calibration + token + camera state that must survive re-renders:
+  const mapUI = {
+    upload: null,      // {image_path, image_w, image_h} awaiting calibration
+    taps: [],          // calibration taps in image pixels
+    viewScale: 0.25,   // calibration preview zoom
+    selectedToken: null,
+  };
+
+  function mapManager() {
+    const box = el(`<div class="card"><h3>🗺 Battle map</h3></div>`);
+    if (mapUI.upload) {
+      box.appendChild(calibrationUI());
+    } else if (snap.map) {
+      box.appendChild(cameraRemote());
+      box.appendChild(tokenManager());
+      const foot = el(`<div class="btn-row"></div>`);
+      const off = el(`<button class="mini ghost">🌙 Map off (back to campfire display)</button>`);
+      off.onclick = () => conn.action('map.set_active', { map_id: null });
+      foot.appendChild(off);
+      foot.appendChild(uploadButton('upload a different map'));
+      box.appendChild(foot);
+    } else {
+      box.appendChild(el(`<p class="muted small">No map active — the projector shows the campfire roster. Upload a battle map to switch.</p>`));
+      const row = el(`<div class="btn-row"></div>`);
+      row.appendChild(uploadButton('📤 Upload map image'));
+      for (const m of snap.maps) {
+        const use = el(`<button class="mini">use map #${m.id}</button>`);
+        use.onclick = () => conn.action('map.set_active', { map_id: m.id });
+        const del = el(`<button class="mini danger ghost">✕</button>`);
+        del.onclick = () => { if (confirm(`Delete stored map #${m.id}?`)) conn.action('map.delete', { map_id: m.id }); };
+        row.append(use, del);
+      }
+      box.appendChild(row);
+    }
+    return box;
+  }
+
+  function uploadButton(label) {
+    const wrap = el(`<span></span>`);
+    const file = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
+    const btn = el(`<button class="mini">${label}</button>`);
+    btn.onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files[0];
+      if (!f) return;
+      conn.toast('Uploading map…', true);
+      const dims = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => reject(new Error('not a readable image'));
+        img.src = URL.createObjectURL(f);
+      });
+      const res = await fetch(`/upload/map?w=${dims.w}&h=${dims.h}`, {
+        method: 'POST', headers: { 'Content-Type': f.type }, body: f,
+      });
+      if (!res.ok) {
+        conn.toast(`upload failed: ${(await res.json()).error}`, false);
+        return;
+      }
+      mapUI.upload = await res.json();
+      mapUI.taps = [];
+      mapUI.viewScale = Math.min(1, 700 / mapUI.upload.image_w);
+      render();
+    };
+    wrap.append(btn, file);
+    return wrap;
+  }
+
+  function calibrationUI() {
+    const u = mapUI.upload;
+    const box = el(`<div></div>`);
+    box.appendChild(el(`<div class="banner small">
+      <strong>Calibrate the grid</strong> — find a clean span of map squares.
+      Tap its <strong>top-left corner</strong>, then the <strong>bottom-right corner</strong>.
+      The wider the span, the more accurate. Set how many cells the span covers below.</div>`));
+
+    const sizeRow = el(`<div class="btn-row"></div>`);
+    const across = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
+    const down = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
+    sizeRow.append(el(`<span class="small">cells across:</span>`), across, el(`<span class="small">cells down:</span>`), down);
+    const zoomOut = el(`<button class="mini">−🔎</button>`);
+    const zoomIn = el(`<button class="mini">+🔎</button>`);
+    zoomOut.onclick = () => { mapUI.viewScale = Math.max(0.05, mapUI.viewScale / 1.4); render(); };
+    zoomIn.onclick = () => { mapUI.viewScale = Math.min(3, mapUI.viewScale * 1.4); render(); };
+    sizeRow.append(zoomOut, zoomIn);
+    const cancel = el(`<button class="mini ghost">cancel</button>`);
+    cancel.onclick = () => { mapUI.upload = null; mapUI.taps = []; render(); };
+    sizeRow.appendChild(cancel);
+    box.appendChild(sizeRow);
+
+    const scroller = el(`<div style="overflow:auto;max-height:60vh;border:1px solid var(--line);border-radius:8px"></div>`);
+    const holder = el(`<div style="position:relative;width:${u.image_w * mapUI.viewScale}px;height:${u.image_h * mapUI.viewScale}px"></div>`);
+    const img = el(`<img src="${u.image_path}" style="width:100%;height:100%;display:block" draggable="false">`);
+    holder.appendChild(img);
+    for (const t of mapUI.taps) {
+      holder.appendChild(el(`<div style="position:absolute;left:${t.x * mapUI.viewScale - 7}px;top:${t.y * mapUI.viewScale - 7}px;width:14px;height:14px;border-radius:50%;border:3px solid var(--ember);pointer-events:none"></div>`));
+    }
+    img.onclick = (ev) => {
+      const r = img.getBoundingClientRect();
+      const x = (ev.clientX - r.left) / mapUI.viewScale;
+      const y = (ev.clientY - r.top) / mapUI.viewScale;
+      mapUI.taps.push({ x, y });
+      if (mapUI.taps.length === 2) {
+        finishCalibration(Number(across.value), Number(down.value));
+      } else {
+        render();
+      }
+    };
+    scroller.appendChild(holder);
+    box.appendChild(scroller);
+    box.appendChild(el(`<p class="muted small">${mapUI.taps.length === 0 ? 'Waiting for the TOP-LEFT tap…' : 'Now tap the BOTTOM-RIGHT corner of the span.'}</p>`));
+    return box;
+  }
+
+  function finishCalibration(cellsAcross, cellsDown) {
+    const u = mapUI.upload;
+    const [a, b] = mapUI.taps;
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+    const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    const cell = ((x1 - x0) / cellsAcross + (y1 - y0) / cellsDown) / 2;
+    if (!(cell >= 4)) {
+      conn.toast('Those taps are too close together — zoom in and try a wider span.', false);
+      mapUI.taps = [];
+      render();
+      return;
+    }
+    conn.action('map.calibrate', {
+      image_path: u.image_path, image_w: u.image_w, image_h: u.image_h,
+      cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
+    });
+    mapUI.upload = null;
+    mapUI.taps = [];
+    conn.toast('Map calibrated and live on the projector! 🗺', true);
+  }
+
+  function cameraRemote() {
+    const map = snap.map;
+    const cam = snap.camera;
+    const box = el(`<div style="border-bottom:1px dashed var(--line);padding-bottom:10px;margin-bottom:10px"></div>`);
+    box.appendChild(el(`<h3 style="margin:4px 0">🎥 Camera</h3>`));
+
+    const send = (next) => {
+      conn.action('camera.update', {
+        center_x: Math.min(Math.max(next.center_x, 0), map.image_w),
+        center_y: Math.min(Math.max(next.center_y, 0), map.image_h),
+        zoom: Math.min(Math.max(next.zoom, 0.05), 20),
+        rotation_deg: next.rotation_deg,
+      });
+    };
+
+    // minimap: tap anywhere to point the camera there
+    const mini = el(`<div style="position:relative;max-width:300px;cursor:crosshair"></div>`);
+    const miniImg = el(`<img src="${map.image_path}" style="width:100%;display:block;border:1px solid var(--line);border-radius:8px" draggable="false">`);
+    mini.appendChild(miniImg);
+    const dot = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:12px;height:12px;margin:-6px;border-radius:50%;border:2px solid var(--ember);background:rgba(255,140,46,.4);pointer-events:none"></div>`);
+    mini.appendChild(dot);
+    miniImg.onclick = (ev) => {
+      const r = miniImg.getBoundingClientRect();
+      send({ ...cam, center_x: ((ev.clientX - r.left) / r.width) * map.image_w, center_y: ((ev.clientY - r.top) / r.height) * map.image_h });
+    };
+    box.appendChild(mini);
+
+    const pan = map.cell_size * 2;
+    const ctl = el(`<div class="btn-row"></div>`);
+    const mk = (txt, fn, title) => {
+      const b = el(`<button class="mini" title="${title}">${txt}</button>`);
+      b.onclick = fn;
+      return b;
+    };
+    ctl.append(
+      mk('◀', () => send({ ...cam, center_x: cam.center_x - pan }), 'nudge left'),
+      mk('▲', () => send({ ...cam, center_y: cam.center_y - pan }), 'nudge up'),
+      mk('▼', () => send({ ...cam, center_y: cam.center_y + pan }), 'nudge down'),
+      mk('▶', () => send({ ...cam, center_x: cam.center_x + pan }), 'nudge right'),
+      mk('+🔎', () => send({ ...cam, zoom: cam.zoom * 1.3 }), 'zoom in'),
+      mk('−🔎', () => send({ ...cam, zoom: cam.zoom / 1.3 }), 'zoom out'),
+      mk('⟲', () => send({ ...cam, rotation_deg: cam.rotation_deg - 15 }), 'rotate left'),
+      mk('⟳', () => send({ ...cam, rotation_deg: cam.rotation_deg + 15 }), 'rotate right'),
+      mk('🎯', () => send({ center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 }), 'reset view'),
+    );
+    box.appendChild(ctl);
+
+    // bookmarks: saved views to snap to mid-session
+    const bm = el(`<div class="btn-row"></div>`);
+    const bmName = el(`<input type="text" placeholder="view name" style="max-width:130px" maxlength="20">`);
+    const bmSave = el(`<button class="mini">📌 save view</button>`);
+    bmSave.onclick = () => {
+      if (bmName.value.trim()) {
+        conn.action('camera.save_bookmark', { name: bmName.value.trim() });
+        bmName.value = '';
+      }
+    };
+    bm.append(bmName, bmSave);
+    for (const b of snap.camera_bookmarks) {
+      const go = el(`<button class="mini ghost">${esc(b.name)}</button>`);
+      go.onclick = () => send(b);
+      const del = el(`<button class="mini danger ghost" title="delete bookmark">✕</button>`);
+      del.onclick = () => conn.action('camera.delete_bookmark', { name: b.name });
+      bm.append(go, del);
+    }
+    box.appendChild(bm);
+    return box;
+  }
+
+  function tokenManager() {
+    const map = snap.map;
+    const dims = CampfireMap.gridDims(map);
+    const box = el(`<div></div>`);
+    box.appendChild(el(`<h3 style="margin:4px 0">♟ Tokens <span class="muted small">(${dims.cols}×${dims.rows} grid)</span></h3>`));
+
+    // create form
+    const form = el(`<div class="btn-row"></div>`);
+    const label = el(`<input type="text" placeholder="Ogre" style="max-width:130px" maxlength="30">`);
+    const kind = el(`<select style="max-width:110px">
+      <option value="monster">monster</option><option value="pc">player</option>
+      <option value="terrain">terrain</option><option value="glow">glow</option></select>`);
+    const charSel = el(`<select style="max-width:140px;display:none"></select>`);
+    for (const c of snap.characters) {
+      if (!snap.tokens.some((t) => t.char_id === c.id)) {
+        charSel.appendChild(el(`<option value="${c.id}">${esc(c.name)}</option>`));
+      }
+    }
+    kind.onchange = () => { charSel.style.display = kind.value === 'pc' ? '' : 'none'; };
+    const addBtn = el(`<button class="mini primary">+ place</button>`);
+    addBtn.onclick = () => {
+      const cam = snap.camera;
+      const at = CampfireMap.clampToGrid(map, ...Object.values(CampfireMap.imageToGrid(map, cam.center_x, cam.center_y)));
+      const payload = { kind: kind.value, col: at.col, row: at.row };
+      if (kind.value === 'pc') {
+        if (!charSel.value) { conn.toast('every character already has a token', false); return; }
+        payload.char_id = Number(charSel.value);
+        payload.label = snap.characters.find((c) => c.id === payload.char_id).name;
+      } else {
+        payload.label = label.value.trim() || kind.value;
+      }
+      if (kind.value === 'glow') {
+        payload.glow_color = '#ff8c2e';
+        payload.glow_radius = 3;
+        payload.glow_pulse = 0.5;
+      }
+      conn.action('token.create', payload);
+      label.value = '';
+    };
+    form.append(label, kind, charSel, addBtn);
+    box.appendChild(form);
+
+    // token list; tap to select, selected gets a d-pad
+    for (const t of snap.tokens) {
+      const icons = { pc: '🧝', monster: '👹', terrain: '🪨', glow: '✨' };
+      const selected = mapUI.selectedToken === t.id;
+      const row = el(`<div class="attr-row" style="cursor:pointer${selected ? ';background:rgba(255,140,46,.08)' : ''}"></div>`);
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})</span></span>`));
+      row.onclick = () => { mapUI.selectedToken = selected ? null : t.id; render(); };
+      if (selected) {
+        const pad = el(`<span class="btn-row" style="margin:0"></span>`);
+        const mv = (dc, dr, txt) => {
+          const b = el(`<button class="mini">${txt}</button>`);
+          b.onclick = (ev) => {
+            ev.stopPropagation();
+            conn.action('token.move', { token_id: t.id, col: t.col + dc, row: t.row + dr });
+          };
+          return b;
+        };
+        const del = el(`<button class="mini danger ghost">✕</button>`);
+        del.onclick = (ev) => { ev.stopPropagation(); mapUI.selectedToken = null; conn.action('token.delete', { token_id: t.id }); };
+        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), del);
+        row.appendChild(pad);
+      }
+      box.appendChild(row);
+    }
+    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — place the party!</p>`));
+    return box;
+  }
+
   // --- character cards ---------------------------------------------------------
   function charCard(c) {
     const dead = c.conditions.some((x) => x.kind === 'dead');
-    const isTurn = snap.initiative.turn_char_id === c.id;
+    const isTurn = snap.initiative.turn_id === `char:${c.id}`;
     const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
     const sys = c.system === 'campfire' ? '🔥' : '🐉';
     card.appendChild(el(`<div class="card-head"><h3>${sys} ${esc(c.name)}</h3><span class="muted small">${esc(c.concept)}</span></div>`));
@@ -250,7 +543,7 @@
     card.appendChild(chips);
 
     const foot = el(`<div class="btn-row"></div>`);
-    if (!snap.initiative.order.includes(c.id)) {
+    if (!snap.initiative.entries.some((e) => e.char_id === c.id)) {
       const init = el(`<button class="mini ghost">+ initiative</button>`);
       init.onclick = () => conn.action('initiative.add', { char_id: c.id });
       foot.appendChild(init);

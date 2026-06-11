@@ -110,10 +110,21 @@ test/smoke.js    self-test run by install + update against a throwaway DB
 Run the self-test any time: `node test/smoke.js`.
 
 **Roadmap** (per `HANDOFF.md` phases): Phase 1 (playable core + teaching page) ✅ ·
-Phase 2 (initiative + clocks) ✅ · Phase 3 (projector battle map: PixiJS is already
-vendored in `public/vendor/`, map upload + grid calibration + tokens + camera remote)
-· Phase 4 (glow effects + polish). The map is system-agnostic by design — tokens and
-grid know nothing about game rules.
+Phase 2 (initiative + clocks) ✅ · Phase 3 (projector battle map) ✅ · Phase 4 has a
+head start (animated glow tokens already render). The map is system-agnostic by
+design — tokens and the grid know nothing about game rules.
+
+### The battle map (Phase 3)
+
+All from the GM screen on a phone: **upload** a map image → **calibrate** by tapping
+the top-left and bottom-right corners of a clean span of squares and saying how many
+cells it covers → the map goes live on the projector. Tokens (players, monsters,
+terrain, pulsing glow lights) live in **grid coordinates**; players get a d-pad on
+their sheet to walk their own token. The camera is a pure view transform — minimap
+tap-to-aim, nudge/zoom/rotate buttons, and named view bookmarks to snap between.
+Initiative accepts **anything**, not just characters — type "Goblin Pack" or "The
+Ritual" and it slots into the turn order. Switching the map off returns the
+projector to campfire mode (roster + clocks + embers).
 
 Art is user-replaceable: drop real dice/symbol images into `public/assets/dice/` and
 `public/assets/symbols/` (names like `green.png`, `triumph.png`) and the learn page

@@ -10,3 +10,9 @@ logs/
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Uploaded battle maps / token art are game content, not code
+public/assets/maps/*
+public/assets/tokens/*
+!public/assets/maps/.gitkeep
+!public/assets/tokens/.gitkeep

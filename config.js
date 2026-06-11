@@ -40,6 +40,12 @@ module.exports = {
   CLOCK_KINDS: ['progress', 'danger'],
   CLOCK_VISIBILITIES: ['visible', 'dm_only'],
 
+  // --- Battle map (Phase 3) ---
+  TOKEN_KINDS: ['pc', 'monster', 'glow', 'terrain'],
+  CAMERA_ZOOM_MIN: 0.05,
+  CAMERA_ZOOM_MAX: 20,
+  MAP_MAX_BYTES: 40 * 1024 * 1024, // Pi 5 single-texture territory; tiling is post-MVP
+
   // --- D&D 5e sheet bounds (sanity rails, not rules enforcement) ---
   DND: {
     ABILITIES: ['str', 'dex', 'con', 'int', 'wis', 'cha'],
