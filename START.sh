@@ -60,12 +60,24 @@ for candidate in chromium-browser chromium firefox; do
 done
 if [ -n "$BROWSER" ] && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
   say "Opening the system window…"
+  # Launch flags matter here:
+  #   --password-store=basic  → no "set a keyring password" popup on first run
+  #   --no-first-run          → no welcome wizard
+  # setsid -f puts the browser in its own session, so it KEEPS RUNNING after
+  # this terminal window closes itself.
   if [ "$BROWSER" = "firefox" ]; then
-    nohup "$BROWSER" "$STATUS_URL" >/dev/null 2>&1 &
+    BROWSER_CMD=("$BROWSER" "$STATUS_URL")
   else
-    nohup "$BROWSER" --app="$STATUS_URL" --noerrdialogs --disable-session-crashed-bubble >/dev/null 2>&1 &
+    BROWSER_CMD=("$BROWSER" --app="$STATUS_URL" --password-store=basic --no-first-run \
+      --noerrdialogs --disable-session-crashed-bubble)
   fi
-  disown
+  if command -v setsid >/dev/null; then
+    setsid -f "${BROWSER_CMD[@]}" >/dev/null 2>&1
+  else
+    nohup "${BROWSER_CMD[@]}" >/dev/null 2>&1 &
+    disown
+  fi
+  say "(If the window doesn't appear, open $STATUS_URL in any browser on the Pi.)"
 else
   warn "No browser/desktop here — open $STATUS_URL yourself to see the QR codes"
 fi
