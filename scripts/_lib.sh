@@ -13,7 +13,9 @@
 set -o pipefail
 
 SCRIPT_NAME="${1:?_lib.sh needs a script name}"
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")/.." && pwd)"
+# _lib.sh lives in <project>/scripts/, so the project root is one level up —
+# regardless of where the calling script sits.
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$APP_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
@@ -44,6 +46,14 @@ hold_open() {
   if [ -t 0 ]; then
     read -r -p "Press Enter to close… " _ || true
   fi
+}
+
+# Success path for one-click scripts: show the result for a few seconds, then
+# let the terminal window close on its own — no extra clicking.
+close_soon() {
+  echo
+  echo -e "${BOLD}(Full log: $LOG_FILE — this window closes itself in 8 seconds)${RESET}"
+  [ -t 0 ] && sleep 8
 }
 
 banner() {

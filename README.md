@@ -25,31 +25,32 @@ mix Campfire heroes and D&D characters in the same session if you like.
 1. On the Pi, open this page in the browser → green **Code** button → **Download ZIP**.
 2. Open the Downloads folder, right-click the ZIP → **Extract Here**, and move the
    folder somewhere comfy (your home folder is perfect).
-3. Open the folder and double-click **`INSTALL - DOUBLE CLICK ME.sh`** → choose
-   **Execute in Terminal**.
+3. Open the folder and double-click **`INSTALL.sh`** → choose **Execute in Terminal**.
 4. Wait for the big "INSTALL COMPLETE" message. Done.
 
-The installer puts these icons on your Desktop:
+Day to day there are just four files, right in this folder:
 
-| Icon | What it does |
+| File | What it does |
 |---|---|
-| 🔥 **Start Campfire Saga** | Starts/restarts the server and shows the address for phones |
-| 🛑 **Stop Campfire Saga** | Stops the server |
-| ⬇ **Update Campfire Saga** | Downloads the newest version from GitHub and restarts (needs internet — do it at home) |
-| 📶 **Campsite WiFi Hotspot** | Toggles the Pi's own WiFi network (`CampfireSaga` / password `tellmeastory`) |
-| 📽 **Projector Display** | Opens the shared display full-screen for the HDMI projector |
+| **START.sh** | The one button: starts the server, sorts out WiFi (raises the `CampfireSaga` hotspot automatically if there's no WiFi around), and opens the system window with QR codes |
+| **STOP.sh** | Everything off: stops the server and the hotspot |
+| **UPDATE.sh** | Downloads the newest version from GitHub, self-tests it, restarts only if it was running (needs internet — do it at home) |
+| **INSTALL.sh** | One-time setup on a fresh Pi |
 
 The server **never starts on its own** — this Pi has other jobs, so nothing runs at
-boot. Double-click 🔥 Start when it's game time, 🛑 Stop when you're done.
+boot. START.sh when it's game time, STOP.sh when you're done.
 
 ## 🏕 At the campsite
 
-1. Power the Pi and double-click **🔥 Start Campfire Saga**.
-2. Double-click **📶 Campsite WiFi Hotspot**. Phones join WiFi **CampfireSaga**
-   (password **tellmeastory**).
-3. Phones browse to **http://10.42.0.1:3000** (the Hotspot window shows the exact
-   address). Players pick **This is me** or forge a new hero; the GM opens **/dm**.
-4. At night, HDMI into the projector and double-click **📽 Projector Display**.
+1. Power the Pi and double-click **START.sh**. That's it.
+2. The system window appears with two QR codes: **scan #1** with a phone camera to
+   join the WiFi (`CampfireSaga` / password `tellmeastory`), **scan #2** to open the
+   game. (At home, where the Pi already has WiFi, step #1 just says "join the same
+   network".) Then turn the Pi's screen off — nobody looks at it again.
+3. On their phones, players pick **This is me** or forge a new hero; the GM opens
+   **/dm**.
+4. At night, HDMI into the projector and tap **"Switch this screen to the projector
+   display"** on the system window (or browse to `/display`).
 
 | Page | Who | What |
 |---|---|---|
@@ -58,6 +59,7 @@ boot. Double-click 🔥 Start when it's game time, 🛑 Stop when you're done.
 | `/dm` | the GM | every character (including secrets), drain/HP controls, initiative, clocks, settings |
 | `/display` | the projector | turn order, party roster, visible clocks, drifting embers |
 | `/learn` | everyone | how to play Campfire Saga, with the dice cheat sheet |
+| `/status` | the Pi itself | the system window START.sh opens: WiFi + game QR codes, who's connected |
 
 ## 📜 Logs (when something looks weird)
 
@@ -65,16 +67,16 @@ Every run of every script writes a timestamped log into the **`logs/`** folder, 
 closed terminal window never loses information:
 
 - `logs/server.log` — everything the game server did, across all runs
-- `logs/latest-install.log`, `latest-start.log`, `latest-update.log`,
-  `latest-hotspot.log`, `latest-projector.log`, `latest-stop.log` — the most recent
-  run of each icon (older runs stay alongside with timestamps in their names)
+- `logs/latest-install.log`, `latest-start.log`, `latest-stop.log`,
+  `latest-update.log` — the most recent run of each script (older runs stay
+  alongside with timestamps in their names)
 
 Open them by double-clicking — they're plain text.
 
 ## 🛠 Troubleshooting
 
-- **Phones can't find the page** → make sure they're on the `CampfireSaga` WiFi, then
-  double-click 🔥 Start — it prints the exact address to type.
+- **Phones can't find the page** → make sure they're on the same WiFi as the Pi
+  (the system window's left panel tells you which), then scan the game QR again.
 - **Install failed at npm** → the Pi was probably offline. Get internet, run Install
   again. (The database module sometimes compiles from source on ARM — the installer
   pre-installs the build tools it needs.)
@@ -98,8 +100,9 @@ rules.js         pure rule helpers (diceForRank — THE rank→dice mapping)
 db.js            better-sqlite3 schema + prepared statements
 state.js         in-memory canonical state, all ops, role-scoped snapshots
 ws.js            websocket plumbing: hello/snapshot/action/error
-public/          the five pages + shared js (ws-client, dice/clock renderers)
-scripts/         the double-click toolkit (everything logs to logs/)
+public/          the six pages + shared js (ws-client, dice/clock renderers)
+*.sh             the double-click toolkit (INSTALL/START/STOP/UPDATE — all tee
+                 their output into logs/); scripts/_lib.sh is the shared plumbing
 systemd/         service template (installer fills in user + path)
 test/smoke.js    self-test run by install + update against a throwaway DB
 ```

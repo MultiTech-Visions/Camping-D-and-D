@@ -37,14 +37,35 @@ process.on('unhandledRejection', (err) => {
 const app = express();
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-const pages = { '/': 'index.html', '/play': 'player.html', '/dm': 'dm.html', '/display': 'display.html', '/learn': 'learn.html' };
+const pages = { '/': 'index.html', '/play': 'player.html', '/dm': 'dm.html', '/display': 'display.html', '/learn': 'learn.html', '/status': 'status.html' };
 for (const [route, file] of Object.entries(pages)) {
   app.get(route, (req, res) => res.sendFile(path.join(PUBLIC_DIR, file)));
 }
 app.use(express.static(PUBLIC_DIR));
 
 const server = http.createServer(app);
-ws.attach(server, log);
+const wss = ws.attach(server, log);
+
+// Live system info for the /status screen (the "system window" START.sh opens
+// on the Pi): addresses, hotspot state, and who's connected.
+const { execFile } = require('child_process');
+app.get('/status.json', (req, res) => {
+  const clients = { player: 0, dm: 0, display: 0 };
+  for (const c of wss.clients) {
+    if (c.role && clients[c.role] !== undefined) clients[c.role]++;
+  }
+  execFile('nmcli', ['-t', '-f', 'NAME', 'connection', 'show', '--active'], (err, stdout) => {
+    // null = "couldn't ask NetworkManager" (e.g. dev machine) — shown as unknown.
+    const hotspotActive = err ? null : stdout.split('\n').includes('Hotspot');
+    res.json({
+      port: config.PORT,
+      addresses: lanAddresses(),
+      hotspot: { ...config.HOTSPOT, active: hotspotActive },
+      clients,
+      uptime_s: Math.floor(process.uptime()),
+    });
+  });
+});
 
 function lanAddresses() {
   const out = [];

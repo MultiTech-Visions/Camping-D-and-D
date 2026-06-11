@@ -7,6 +7,13 @@
 module.exports = {
   PORT: 3000,
 
+  // --- Campsite WiFi hotspot (START.sh turns it on when no WiFi is around;
+  //     the /status screen shows a join-QR for it) ---
+  HOTSPOT: {
+    SSID: 'CampfireSaga',
+    PASSWORD: 'tellmeastory',
+  },
+
   // --- Campfire Saga character creation ---
   STARTING_POINTS: 4, // points distributed across the four attributes at creation
   CREATION_MAX: 2,    // no attribute may exceed this at creation
