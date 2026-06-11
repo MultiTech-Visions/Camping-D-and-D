@@ -188,9 +188,14 @@
   // --- battle map manager (Phase 3) -------------------------------------------
   // Calibration + token + camera state that must survive re-renders:
   const mapUI = {
-    upload: null,      // {image_path, image_w, image_h} awaiting calibration
-    taps: [],          // calibration taps in image pixels
-    viewScale: 0.25,   // calibration preview zoom
+    upload: null,        // {image_path, image_w, image_h} awaiting calibration
+    editingMapId: null,  // set when re-calibrating an existing map
+    name: '',            // map name being typed
+    taps: [],            // calibration taps in image pixels
+    viewScale: 0.25,     // calibration preview zoom
+    scroll: { left: 0, top: 0 }, // preview scroll position, preserved across re-renders
+    cellsAcross: 5,
+    cellsDown: 5,
     selectedToken: null,
   };
 
@@ -199,6 +204,25 @@
     if (mapUI.upload) {
       box.appendChild(calibrationUI());
     } else if (snap.map) {
+      const head = el(`<div class="btn-row"></div>`);
+      head.appendChild(el(`<strong style="flex:1">🗺 ${esc(snap.map.name)}</strong>`));
+      const rename = el(`<button class="mini ghost" title="rename this map">✎ rename</button>`);
+      rename.onclick = () => {
+        const name = prompt('Map name:', snap.map.name);
+        if (name && name.trim()) conn.action('map.rename', { map_id: snap.map.id, name: name.trim() });
+      };
+      const recal = el(`<button class="mini ghost" title="re-do the two-tap grid calibration">📐 fix grid</button>`);
+      recal.onclick = () => {
+        mapUI.upload = { image_path: snap.map.image_path, image_w: snap.map.image_w, image_h: snap.map.image_h };
+        mapUI.editingMapId = snap.map.id;
+        mapUI.name = snap.map.name;
+        mapUI.taps = [];
+        mapUI.viewScale = Math.min(1, 700 / snap.map.image_w);
+        mapUI.scroll = { left: 0, top: 0 };
+        render();
+      };
+      head.append(rename, recal);
+      box.appendChild(head);
       box.appendChild(cameraRemote());
       box.appendChild(tokenManager());
       const foot = el(`<div class="btn-row"></div>`);
@@ -209,16 +233,21 @@
       box.appendChild(foot);
     } else {
       box.appendChild(el(`<p class="muted small">No map active — the projector shows the campfire roster. Upload a battle map to switch.</p>`));
-      const row = el(`<div class="btn-row"></div>`);
-      row.appendChild(uploadButton('📤 Upload map image'));
+      box.appendChild(uploadButton('📤 Upload map image'));
       for (const m of snap.maps) {
-        const use = el(`<button class="mini">use map #${m.id}</button>`);
+        const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
+        const use = el(`<button class="mini" style="flex:1;text-align:left">🗺 ${esc(m.name)}</button>`);
         use.onclick = () => conn.action('map.set_active', { map_id: m.id });
+        const rename = el(`<button class="mini ghost" title="rename">✎</button>`);
+        rename.onclick = () => {
+          const name = prompt('Map name:', m.name);
+          if (name && name.trim()) conn.action('map.rename', { map_id: m.id, name: name.trim() });
+        };
         const del = el(`<button class="mini danger ghost">✕</button>`);
-        del.onclick = () => { if (confirm(`Delete stored map #${m.id}?`)) conn.action('map.delete', { map_id: m.id }); };
-        row.append(use, del);
+        del.onclick = () => { if (confirm(`Delete “${m.name}”?`)) conn.action('map.delete', { map_id: m.id }); };
+        row.append(use, rename, del);
+        box.appendChild(row);
       }
-      box.appendChild(row);
     }
     return box;
   }
@@ -246,8 +275,11 @@
         return;
       }
       mapUI.upload = await res.json();
+      mapUI.editingMapId = null;
+      mapUI.name = f.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'New map';
       mapUI.taps = [];
       mapUI.viewScale = Math.min(1, 700 / mapUI.upload.image_w);
+      mapUI.scroll = { left: 0, top: 0 };
       render();
     };
     wrap.append(btn, file);
@@ -256,23 +288,35 @@
 
   function calibrationUI() {
     const u = mapUI.upload;
+    const editing = mapUI.editingMapId !== null;
     const box = el(`<div></div>`);
     box.appendChild(el(`<div class="banner small">
-      <strong>Calibrate the grid</strong> — find a clean span of map squares.
+      <strong>${editing ? `Re-calibrating “${esc(mapUI.name)}”` : 'Calibrate the grid'}</strong> — find a clean span of map squares.
       Tap its <strong>top-left corner</strong>, then the <strong>bottom-right corner</strong>.
       The wider the span, the more accurate. Set how many cells the span covers below.</div>`));
 
+    if (!editing) {
+      const nameRow = el(`<div class="btn-row"></div>`);
+      const nameIn = el(`<input type="text" placeholder="map name" maxlength="40" style="max-width:240px">`);
+      nameIn.value = mapUI.name;
+      nameIn.oninput = () => { mapUI.name = nameIn.value; };
+      nameRow.append(el(`<span class="small">name:</span>`), nameIn);
+      box.appendChild(nameRow);
+    }
+
     const sizeRow = el(`<div class="btn-row"></div>`);
-    const across = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
-    const down = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
+    const across = el(`<input type="number" data-live="1" min="1" max="100" style="width:70px;text-align:center">`);
+    const down = el(`<input type="number" data-live="1" min="1" max="100" style="width:70px;text-align:center">`);
+    across.value = mapUI.cellsAcross;
+    down.value = mapUI.cellsDown;
+    across.onchange = () => { mapUI.cellsAcross = Number(across.value); };
+    down.onchange = () => { mapUI.cellsDown = Number(down.value); };
     sizeRow.append(el(`<span class="small">cells across:</span>`), across, el(`<span class="small">cells down:</span>`), down);
     const zoomOut = el(`<button class="mini">−🔎</button>`);
     const zoomIn = el(`<button class="mini">+🔎</button>`);
-    zoomOut.onclick = () => { mapUI.viewScale = Math.max(0.05, mapUI.viewScale / 1.4); render(); };
-    zoomIn.onclick = () => { mapUI.viewScale = Math.min(3, mapUI.viewScale * 1.4); render(); };
     sizeRow.append(zoomOut, zoomIn);
     const cancel = el(`<button class="mini ghost">cancel</button>`);
-    cancel.onclick = () => { mapUI.upload = null; mapUI.taps = []; render(); };
+    cancel.onclick = () => { mapUI.upload = null; mapUI.editingMapId = null; mapUI.taps = []; render(); };
     sizeRow.appendChild(cancel);
     box.appendChild(sizeRow);
 
@@ -283,13 +327,41 @@
     for (const t of mapUI.taps) {
       holder.appendChild(el(`<div style="position:absolute;left:${t.x * mapUI.viewScale - 7}px;top:${t.y * mapUI.viewScale - 7}px;width:14px;height:14px;border-radius:50%;border:3px solid var(--ember);pointer-events:none"></div>`));
     }
+
+    // Keep the view where the GM left it: remember scrolling continuously and
+    // restore after every re-render (taps and zooms used to bounce the view
+    // back to the top-left corner — maddening on a big map).
+    scroller.addEventListener('scroll', () => {
+      mapUI.scroll = { left: scroller.scrollLeft, top: scroller.scrollTop };
+    }, { passive: true });
+    requestAnimationFrame(() => {
+      scroller.scrollLeft = mapUI.scroll.left;
+      scroller.scrollTop = mapUI.scroll.top;
+    });
+
+    // Zoom around the center of what's currently on screen, not the corner.
+    const zoomBy = (factor) => {
+      const oldScale = mapUI.viewScale;
+      const newScale = Math.min(3, Math.max(0.05, oldScale * factor));
+      const cx = scroller.scrollLeft + scroller.clientWidth / 2;
+      const cy = scroller.scrollTop + scroller.clientHeight / 2;
+      mapUI.scroll = {
+        left: Math.max(0, (cx * newScale) / oldScale - scroller.clientWidth / 2),
+        top: Math.max(0, (cy * newScale) / oldScale - scroller.clientHeight / 2),
+      };
+      mapUI.viewScale = newScale;
+      render();
+    };
+    zoomOut.onclick = () => zoomBy(1 / 1.4);
+    zoomIn.onclick = () => zoomBy(1.4);
+
     img.onclick = (ev) => {
       const r = img.getBoundingClientRect();
       const x = (ev.clientX - r.left) / mapUI.viewScale;
       const y = (ev.clientY - r.top) / mapUI.viewScale;
       mapUI.taps.push({ x, y });
       if (mapUI.taps.length === 2) {
-        finishCalibration(Number(across.value), Number(down.value));
+        finishCalibration(mapUI.cellsAcross, mapUI.cellsDown);
       } else {
         render();
       }
@@ -312,13 +384,23 @@
       render();
       return;
     }
-    conn.action('map.calibrate', {
-      image_path: u.image_path, image_w: u.image_w, image_h: u.image_h,
-      cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
-    });
+    if (mapUI.editingMapId !== null) {
+      conn.action('map.update_calibration', {
+        map_id: mapUI.editingMapId,
+        cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
+      });
+      conn.toast('Grid re-calibrated! Check it with ▦ grid on.', true);
+    } else {
+      conn.action('map.calibrate', {
+        name: mapUI.name.trim() || 'New map',
+        image_path: u.image_path, image_w: u.image_w, image_h: u.image_h,
+        cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
+      });
+      conn.toast('Map calibrated and live on the projector! 🗺', true);
+    }
     mapUI.upload = null;
+    mapUI.editingMapId = null;
     mapUI.taps = [];
-    conn.toast('Map calibrated and live on the projector! 🗺', true);
   }
 
   function cameraRemote() {

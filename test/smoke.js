@@ -203,13 +203,31 @@ let mapId;
 check('map calibrate: bounds enforced, becomes active with a camera', () => {
   throws(() => ops['token.create']({ label: 'early', kind: 'monster', col: 0, row: 0 })); // no map yet
   mapId = ops['map.calibrate']({
-    image_path: '/assets/maps/test.png', image_w: 1000, image_h: 800,
+    name: 'Goblin Bridge', image_path: '/assets/maps/test.png', image_w: 1000, image_h: 800,
     cell_size: 50, offset_x: 10, offset_y: 20,
   }).created_map_id;
   assert.strictEqual(state.game.active_map_id, mapId);
   assert.ok(state.camera && state.camera.center_x === 500);
-  throws(() => ops['map.calibrate']({ image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 2, offset_x: 0, offset_y: 0 })); // cell too small
-  throws(() => ops['map.calibrate']({ image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 50, offset_x: 60, offset_y: 0 })); // offset >= cell
+  throws(() => ops['map.calibrate']({ name: 'x', image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 2, offset_x: 0, offset_y: 0 })); // cell too small
+  throws(() => ops['map.calibrate']({ name: 'x', image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 50, offset_x: 60, offset_y: 0 })); // offset >= cell
+  throws(() => ops['map.calibrate']({ name: '  ', image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 50, offset_x: 0, offset_y: 0 })); // blank name
+});
+
+check('map rename + re-calibration (tokens clamp to the new grid)', () => {
+  ops['map.rename']({ map_id: mapId, name: 'Goblin Bridge (night)' });
+  assert.strictEqual(state.maps.get(mapId).name, 'Goblin Bridge (night)');
+  throws(() => ops['map.rename']({ map_id: mapId, name: '' }));
+
+  const edge = ops['token.create']({ label: 'Edge Lurker', kind: 'monster', col: 18, row: 14 }).created_token_id;
+  // bigger cells → fewer cells (9x7) → the lurker at (18,14) must clamp to (8,6)
+  ops['map.update_calibration']({ map_id: mapId, cell_size: 100, offset_x: 50, offset_y: 50 });
+  assert.strictEqual(state.maps.get(mapId).cell_size, 100);
+  const lurker = state.tokens.get(edge);
+  assert.deepStrictEqual({ col: lurker.col, row: lurker.row }, { col: 8, row: 6 });
+  throws(() => ops['map.update_calibration']({ map_id: mapId, cell_size: 2, offset_x: 0, offset_y: 0 }));
+  // restore the original grid for the following checks
+  ops['map.update_calibration']({ map_id: mapId, cell_size: 50, offset_x: 10, offset_y: 20 });
+  ops['token.delete']({ token_id: edge });
 });
 
 check('tokens live in grid space with bounds; one pc token per character', () => {

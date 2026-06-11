@@ -168,6 +168,14 @@ function assertFiniteNumber(value, name) {
   return value;
 }
 
+function assertCalibrationSane(row) {
+  R.assert(row.cell_size >= 4, `cell_size must be at least 4 image pixels, got ${row.cell_size}`);
+  R.assert(row.offset_x >= 0 && row.offset_x < row.cell_size, 'offset_x must be within [0, cell_size)');
+  R.assert(row.offset_y >= 0 && row.offset_y < row.cell_size, 'offset_y must be within [0, cell_size)');
+  const dims = gridDims(row);
+  R.assert(dims.cols >= 1 && dims.rows >= 1, 'calibration leaves no whole cells on the map');
+}
+
 function removeInitiativeEntries(predicate) {
   state.initiative.entries = state.initiative.entries.filter((e) => !predicate(e));
   if (!state.initiative.entries.some((e) => e.id === state.initiative.turn_id)) {
@@ -420,6 +428,7 @@ const ops = {
   // pixels. Creates the map record and makes it active with a fresh camera.
   'map.calibrate'(p) {
     const row = {
+      name: R.assertNonEmptyString(p.name, 'name'),
       image_path: R.assertNonEmptyString(p.image_path, 'image_path'),
       image_w: R.assertIntIn(p.image_w, 1, 16384, 'image_w'),
       image_h: R.assertIntIn(p.image_h, 1, 16384, 'image_h'),
@@ -428,16 +437,50 @@ const ops = {
       offset_y: assertFiniteNumber(p.offset_y, 'offset_y'),
       grid_visible: 1,
     };
-    R.assert(row.cell_size >= 4, `cell_size must be at least 4 image pixels, got ${row.cell_size}`);
-    R.assert(row.offset_x >= 0 && row.offset_x < row.cell_size, 'offset_x must be within [0, cell_size)');
-    R.assert(row.offset_y >= 0 && row.offset_y < row.cell_size, 'offset_y must be within [0, cell_size)');
-    const dims = gridDims(row);
-    R.assert(dims.cols >= 1 && dims.rows >= 1, 'calibration leaves no whole cells on the map');
+    assertCalibrationSane(row);
     const info = stmts.insertMap.run(row);
     const id = Number(info.lastInsertRowid);
     state.maps.set(id, { ...row, id });
     ops['map.set_active']({ map_id: id });
     return { created_map_id: id };
+  },
+
+  // Fine-tune an existing map's grid after the fact. Tokens that the new grid
+  // leaves out of bounds are clamped to its edge — a deliberate migration of
+  // the board, not a silent default.
+  'map.update_calibration'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    const next = {
+      ...map,
+      cell_size: assertFiniteNumber(p.cell_size, 'cell_size'),
+      offset_x: assertFiniteNumber(p.offset_x, 'offset_x'),
+      offset_y: assertFiniteNumber(p.offset_y, 'offset_y'),
+    };
+    assertCalibrationSane(next);
+    Object.assign(map, next);
+    stmts.updateMapCalibration.run(map.cell_size, map.offset_x, map.offset_y, map.id);
+    if (state.game.active_map_id === map.id) {
+      const dims = gridDims(map);
+      for (const t of state.tokens.values()) {
+        const col = Math.min(Math.max(t.col, 0), dims.cols - 1);
+        const row = Math.min(Math.max(t.row, 0), dims.rows - 1);
+        if (col !== t.col || row !== t.row) {
+          t.col = col;
+          t.row = row;
+          stmts.updateToken.run(t);
+        }
+      }
+    }
+  },
+
+  'map.rename'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    map.name = R.assertNonEmptyString(p.name, 'name');
+    stmts.renameMap.run(map.name, map.id);
   },
 
   'map.set_active'(p) {
