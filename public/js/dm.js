@@ -372,25 +372,38 @@
     ctl.appendChild(gridBtn);
     box.appendChild(ctl);
 
-    // bookmarks: saved views to snap to mid-session
+    // bookmarks: saved views to snap to mid-session — save field on top,
+    // the list of saved views rendered underneath it
     const bm = el(`<div class="btn-row"></div>`);
-    const bmName = el(`<input type="text" placeholder="view name" style="max-width:130px" maxlength="20">`);
-    const bmSave = el(`<button class="mini">📌 save view</button>`);
-    bmSave.onclick = () => {
+    const bmName = el(`<input type="text" placeholder="view name (e.g. ambush)" style="max-width:180px" maxlength="20">`);
+    const bmSave = el(`<button class="mini">📌 save this view</button>`);
+    const saveView = () => {
       if (bmName.value.trim()) {
         conn.action('camera.save_bookmark', { name: bmName.value.trim() });
         bmName.value = '';
       }
     };
+    bmSave.onclick = saveView;
+    bmName.onkeydown = (ev) => { if (ev.key === 'Enter') saveView(); };
     bm.append(bmName, bmSave);
-    for (const b of snap.camera_bookmarks) {
-      const go = el(`<button class="mini ghost">${esc(b.name)}</button>`);
-      go.onclick = () => send(b);
-      const del = el(`<button class="mini danger ghost" title="delete bookmark">✕</button>`);
-      del.onclick = () => conn.action('camera.delete_bookmark', { name: b.name });
-      bm.append(go, del);
-    }
     box.appendChild(bm);
+
+    if (snap.camera_bookmarks.length > 0) {
+      const list = el(`<div style="margin-top:4px"></div>`);
+      list.appendChild(el(`<div class="muted small">Saved views — tap to jump:</div>`));
+      for (const b of snap.camera_bookmarks) {
+        const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
+        const go = el(`<button class="mini" style="flex:1;text-align:left">🎥 ${esc(b.name)} <span class="muted small">(${Math.round(b.zoom * 100)}%${b.rotation_deg ? ` · ${b.rotation_deg}°` : ''})</span></button>`);
+        go.onclick = () => send(b);
+        const overwrite = el(`<button class="mini ghost" title="re-save this view as the current camera">update</button>`);
+        overwrite.onclick = () => conn.action('camera.save_bookmark', { name: b.name });
+        const del = el(`<button class="mini danger ghost" title="delete this view">✕</button>`);
+        del.onclick = () => conn.action('camera.delete_bookmark', { name: b.name });
+        row.append(go, overwrite, del);
+        list.appendChild(row);
+      }
+      box.appendChild(list);
+    }
     return box;
   }
 
