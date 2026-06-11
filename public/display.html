@@ -5,9 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campfire Saga — Display</title>
 <link rel="stylesheet" href="/css/app.css">
+<style>
+  /* battle-map mode chrome */
+  #map-root { position: fixed; inset: 0; z-index: 0; display: none; }
+  #map-root.on { display: block; }
+  body.map-mode .display-grid { grid-template-columns: 1fr 300px; }
+  body.map-mode .display-main { justify-content: flex-start; align-items: flex-start; pointer-events: none; }
+  body.map-mode #d-clocks .clock-box { transform: scale(0.75); margin: -6px; }
+  body.map-mode #d-title { display: none; }
+  body.map-mode .display-roster .card { background: rgba(31, 24, 19, 0.88); }
+  body.map-mode #embers { display: none; }
+</style>
 </head>
 <body class="display-mode">
 <canvas id="embers"></canvas>
+<div id="map-root"></div>
 <div class="display-grid">
   <div class="display-main">
     <h1 id="d-title">🔥 Campfire Saga</h1>
@@ -16,8 +28,10 @@
   </div>
   <aside class="display-roster" id="d-roster"></aside>
 </div>
+<script src="/vendor/pixi.min.js"></script>
 <script src="/js/ws-client.js"></script>
 <script src="/js/dice.js"></script>
+<script src="/js/map-utils.js"></script>
 <script src="/js/display.js"></script>
 </body>
 </html>

@@ -1,15 +1,24 @@
 'use strict';
 
-// Projector display client (Phase 2 version): roster + visible clocks + whose
-// turn, with a cheap canvas ember effect. The Phase 3 PixiJS battle map slots
-// into this page later — see HANDOFF §7 for the three coordinate spaces:
-//   1. image space (raw map pixels) → 2. grid space (col,row — where tokens
-//   live) → 3. camera/screen space (pure view transform at render time only).
+// Projector display client.
+//
+// THE THREE COORDINATE SPACES (handoff §7 — state of law for this renderer):
+//   1. IMAGE space  — raw pixels of the uploaded map; fixed; calibration
+//      (cell_size, offset_x/y) lives here.
+//   2. GRID space   — (col,row) integers derived from calibration. TOKEN
+//      POSITIONS ARE STORED HERE AND ONLY HERE.
+//   3. SCREEN space — what the projector shows; derived at render time from
+//      the camera object only. The camera is a pure view transform: panning,
+//      zooming, or rotating it NEVER changes a token's stored position.
+//
+// Two modes: campfire mode (roster + clocks + embers, no map) and map mode
+// (PixiJS WebGL: map sprite + tokens + glows, camera-driven).
 
 (function () {
   const turnEl = document.getElementById('d-turn');
   const clocksEl = document.getElementById('d-clocks');
   const rosterEl = document.getElementById('d-roster');
+  const mapRoot = document.getElementById('map-root');
 
   function esc(s) {
     const d = document.createElement('div');
@@ -22,31 +31,172 @@
     return t.content.firstChild;
   }
 
+  // ------------------------------------------------------------------------
+  // PixiJS map renderer (created lazily; torn down when the map turns off)
+  // ------------------------------------------------------------------------
+  const pixi = {
+    app: null, world: null, mapSprite: null, tokenLayer: null,
+    imagePath: null, glows: [],
+  };
+
+  function ensurePixi() {
+    if (pixi.app) return;
+    pixi.app = new PIXI.Application({
+      resizeTo: window,
+      backgroundColor: 0x14100d,
+      antialias: true,
+    });
+    mapRoot.appendChild(pixi.app.view);
+    pixi.world = new PIXI.Container();
+    pixi.app.stage.addChild(pixi.world);
+    pixi.tokenLayer = new PIXI.Container();
+
+    // glow pulse animation — cheap sine on alpha/scale, display client only
+    pixi.app.ticker.add(() => {
+      const t = performance.now() / 1000;
+      for (const g of pixi.glows) {
+        const wave = g.pulse === 0 ? 1 : 0.75 + 0.25 * Math.sin(2 * Math.PI * g.pulse * t);
+        g.sprite.alpha = 0.55 * wave;
+        g.sprite.scale.set(wave);
+      }
+    });
+  }
+
+  function teardownPixi() {
+    if (!pixi.app) return;
+    pixi.app.destroy(true, { children: true, texture: false });
+    pixi.app = null;
+    pixi.world = null;
+    pixi.mapSprite = null;
+    pixi.tokenLayer = null;
+    pixi.imagePath = null;
+    pixi.glows = [];
+    mapRoot.innerHTML = '';
+  }
+
+  const KIND_COLORS = { pc: 0x3e8ed0, monster: 0xc43c34, terrain: 0x6b6b6b };
+
+  function renderMap(snap) {
+    ensurePixi();
+    const map = snap.map;
+
+    if (pixi.imagePath !== map.image_path) {
+      pixi.world.removeChildren();
+      pixi.mapSprite = PIXI.Sprite.from(map.image_path);
+      pixi.mapSprite.width = map.image_w;
+      pixi.mapSprite.height = map.image_h;
+      pixi.world.addChild(pixi.mapSprite);
+      pixi.world.addChild(pixi.tokenLayer);
+      pixi.imagePath = map.image_path;
+    }
+
+    // --- tokens: rebuilt each snapshot (dozens at most — cheap) -------------
+    pixi.tokenLayer.removeChildren();
+    pixi.glows = [];
+    const turnEntry = snap.initiative.entries.find((e) => e.id === snap.initiative.turn_id);
+    const r = map.cell_size * 0.4;
+
+    for (const tok of snap.tokens) {
+      const { x, y } = CampfireMap.cellCenter(map, tok.col, tok.row);
+
+      if (tok.kind === 'glow') {
+        const g = new PIXI.Graphics();
+        const color = Number(`0x${tok.glow_color.replace('#', '')}`);
+        const radius = tok.glow_radius * map.cell_size;
+        for (let i = 5; i >= 1; i--) {
+          g.beginFill(color, 0.18);
+          g.drawCircle(0, 0, (radius * i) / 5);
+          g.endFill();
+        }
+        g.position.set(x, y);
+        g.blendMode = PIXI.BLEND_MODES.ADD;
+        pixi.tokenLayer.addChild(g);
+        pixi.glows.push({ sprite: g, pulse: tok.glow_pulse });
+        continue;
+      }
+
+      const holder = new PIXI.Container();
+      holder.position.set(x, y);
+      const isTurn = turnEntry && turnEntry.char_id !== null && turnEntry.char_id === tok.char_id;
+      const char = tok.char_id === null ? null : snap.characters.find((c) => c.id === tok.char_id);
+      const dead = char ? char.conditions.some((c) => c.kind === 'dead') : false;
+
+      const disc = new PIXI.Graphics();
+      if (isTurn) {
+        disc.lineStyle(map.cell_size * 0.08, 0xff8c2e, 1);
+      } else {
+        disc.lineStyle(2, 0x000000, 0.8);
+      }
+      disc.beginFill(KIND_COLORS[tok.kind], dead ? 0.35 : 0.95);
+      disc.drawCircle(0, 0, r);
+      disc.endFill();
+      holder.addChild(disc);
+
+      const label = new PIXI.Text(dead ? '✕ ' + tok.label : tok.label, {
+        fontFamily: 'Georgia, serif',
+        fontSize: Math.max(map.cell_size * 0.28, 11),
+        fill: 0xf3e9d8,
+        stroke: 0x000000,
+        strokeThickness: 3,
+        align: 'center',
+      });
+      label.anchor.set(0.5, 0);
+      label.position.set(0, r * 1.1);
+      holder.addChild(label);
+
+      if (dead) holder.alpha = 0.55;
+      pixi.tokenLayer.addChild(holder);
+    }
+
+    // --- camera: pure view transform, applied to the world container only ---
+    const cam = snap.camera;
+    pixi.world.pivot.set(cam.center_x, cam.center_y);
+    pixi.world.position.set(pixi.app.screen.width / 2, pixi.app.screen.height / 2);
+    pixi.world.scale.set(cam.zoom);
+    pixi.world.rotation = (cam.rotation_deg * Math.PI) / 180;
+  }
+
+  // ------------------------------------------------------------------------
+  // Shared DOM chrome (both modes): turn banner, clocks, roster sidebar
+  // ------------------------------------------------------------------------
   CampfireWS.connect({
     role: 'display',
     onSnapshot(snap) {
-      // whose turn
-      const turnId = snap.initiative.turn_char_id;
-      const turnChar = snap.characters.find((c) => c.id === turnId);
-      turnEl.textContent = turnChar ? `▶ ${turnChar.name}'s turn` : '';
+      const mapMode = snap.map !== null;
+      document.body.classList.toggle('map-mode', mapMode);
+      mapRoot.classList.toggle('on', mapMode);
+      if (mapMode) renderMap(snap);
+      else teardownPixi();
 
-      // visible clocks, big
-      clocksEl.innerHTML = '';
-      for (const clock of snap.clocks) {
-        clocksEl.appendChild(CampfireDice.renderClock(clock, { size: 170 }));
+      // whose turn (characters or custom entries like "Goblin Pack")
+      const turnEntry = snap.initiative.entries.find((e) => e.id === snap.initiative.turn_id);
+      if (!turnEntry) {
+        turnEl.textContent = '';
+      } else if (turnEntry.char_id !== null) {
+        const c = snap.characters.find((x) => x.id === turnEntry.char_id);
+        turnEl.textContent = `▶ ${c.name}'s turn`;
+      } else {
+        turnEl.textContent = `▶ ${turnEntry.label}`;
       }
 
-      // roster
+      // visible clocks
+      clocksEl.innerHTML = '';
+      for (const clock of snap.clocks) {
+        clocksEl.appendChild(CampfireDice.renderClock(clock, { size: mapMode ? 120 : 170 }));
+      }
+
+      // roster, initiative order first
       rosterEl.innerHTML = '<h2 style="margin-top:0">The Party</h2>';
-      const order = snap.initiative.order;
+      const order = snap.initiative.entries.map((e) => e.char_id).filter((id) => id !== null);
       const sorted = [...snap.characters].sort((a, b) => {
         const ai = order.indexOf(a.id), bi = order.indexOf(b.id);
         return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
       });
+      const turnCharId = turnEntry && turnEntry.char_id !== null ? turnEntry.char_id : null;
       for (const c of sorted) {
         const dead = c.conditions.some((x) => x.kind === 'dead');
-        const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${c.id === turnId ? 'turn-active' : ''}"></div>`);
-        card.appendChild(el(`<strong>${c.id === turnId ? '▶ ' : ''}${esc(c.name)}</strong>`));
+        const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${c.id === turnCharId ? 'turn-active' : ''}"></div>`);
+        card.appendChild(el(`<strong>${c.id === turnCharId ? '▶ ' : ''}${esc(c.name)}</strong>`));
         if (c.system === 'campfire') {
           const dice = el(`<div></div>`);
           const total = { green: 0, yellow: 0, blue: c.granted_blue };
@@ -72,7 +222,7 @@
     },
   });
 
-  // --- ember particles: cheap 2D canvas, fine on a Pi 5 at 1080p -------------
+  // --- ember particles: campfire mode only; cheap 2D canvas ------------------
   const canvas = document.getElementById('embers');
   const ctx = canvas.getContext('2d');
   let embers = [];
@@ -103,18 +253,20 @@
   }
 
   function tick() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (const e of embers) {
-      e.y -= e.vy;
-      e.x += e.vx + Math.sin(e.y / 40) * 0.3;
-      e.life -= e.decay;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${e.hue}, 100%, 60%, ${Math.max(e.life, 0) * 0.7})`;
-      ctx.fill();
+    if (!document.body.classList.contains('map-mode')) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const e of embers) {
+        e.y -= e.vy;
+        e.x += e.vx + Math.sin(e.y / 40) * 0.3;
+        e.life -= e.decay;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${e.hue}, 100%, 60%, ${Math.max(e.life, 0) * 0.7})`;
+        ctx.fill();
+      }
+      embers = embers.filter((e) => e.life > 0 && e.y > -10);
+      while (embers.length < 40) embers.push(spawn());
     }
-    embers = embers.filter((e) => e.life > 0 && e.y > -10);
-    while (embers.length < 40) embers.push(spawn());
     requestAnimationFrame(tick);
   }
   tick();

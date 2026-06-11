@@ -43,6 +43,26 @@ for (const [route, file] of Object.entries(pages)) {
 }
 app.use(express.static(PUBLIC_DIR));
 
+// Map upload (Phase 3). The GM's browser measures the image dimensions and
+// sends the raw bytes; calibration follows over WebSocket (map.calibrate).
+const UPLOAD_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+app.post('/upload/map',
+  express.raw({ type: Object.keys(UPLOAD_TYPES), limit: config.MAP_MAX_BYTES }),
+  (req, res) => {
+    const ext = UPLOAD_TYPES[req.headers['content-type']];
+    const w = Number(req.query.w);
+    const h = Number(req.query.h);
+    if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
+    if (!Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1) {
+      return res.status(400).json({ error: 'w and h query params must be the image pixel dimensions' });
+    }
+    const name = `map-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'maps', name), req.body);
+    log(`map uploaded: ${name} (${w}x${h}, ${req.body.length} bytes)`);
+    res.json({ image_path: `/assets/maps/${name}`, image_w: w, image_h: h });
+  });
+
 const server = http.createServer(app);
 const wss = ws.attach(server, log);
 

@@ -136,14 +136,29 @@ check('conditions per-system, no duplicates', () => {
   assert.strictEqual(state.characters.get(heroId).conditions.length, 0);
 });
 
-check('initiative add/reorder/turn', () => {
+check('initiative: characters + custom entries, reorder, turn', () => {
   ops['initiative.add']({ char_id: heroId });
   ops['initiative.add']({ char_id: wizardId });
   throws(() => ops['initiative.add']({ char_id: heroId })); // duplicate
-  ops['initiative.reorder']({ ordered_char_ids: [wizardId, heroId] });
-  throws(() => ops['initiative.reorder']({ ordered_char_ids: [wizardId] })); // wrong membership
-  ops['initiative.set_turn']({ char_id: wizardId });
-  assert.strictEqual(state.initiative.turn_char_id, wizardId);
+  const goblinId = ops['initiative.add_custom']({ label: 'Goblin Pack' }).created_entry_id;
+  const lairId = ops['initiative.add_custom']({ label: 'Lair Action' }).created_entry_id;
+  throws(() => ops['initiative.add_custom']({ label: '   ' })); // empty label
+  assert.strictEqual(state.initiative.entries.length, 4);
+
+  ops['initiative.reorder']({ ordered_entry_ids: [goblinId, `char:${wizardId}`, lairId, `char:${heroId}`] });
+  assert.strictEqual(state.initiative.entries[0].label, 'Goblin Pack');
+  throws(() => ops['initiative.reorder']({ ordered_entry_ids: [goblinId] })); // wrong membership
+
+  ops['initiative.set_turn']({ entry_id: goblinId });
+  assert.strictEqual(state.initiative.turn_id, goblinId);
+  ops['initiative.set_turn']({ char_id: wizardId }); // char_id form still works
+  assert.strictEqual(state.initiative.turn_id, `char:${wizardId}`);
+
+  ops['initiative.set_turn']({ entry_id: lairId });
+  ops['initiative.remove']({ entry_id: lairId }); // removing the turn-holder clears the turn
+  assert.strictEqual(state.initiative.turn_id, null);
+  assert.strictEqual(state.initiative.entries.length, 3);
+  ops['initiative.set_turn']({ entry_id: goblinId });
 });
 
 let clockId, secretId;
@@ -184,9 +199,59 @@ check('reveal: dm_only clock flips visible in one op', () => {
   assert.ok(snapshotFor('player', heroId).clocks.some((c) => c.id === secretId));
 });
 
-check('character.delete cleans initiative', () => {
+let mapId;
+check('map calibrate: bounds enforced, becomes active with a camera', () => {
+  throws(() => ops['token.create']({ label: 'early', kind: 'monster', col: 0, row: 0 })); // no map yet
+  mapId = ops['map.calibrate']({
+    image_path: '/assets/maps/test.png', image_w: 1000, image_h: 800,
+    cell_size: 50, offset_x: 10, offset_y: 20,
+  }).created_map_id;
+  assert.strictEqual(state.game.active_map_id, mapId);
+  assert.ok(state.camera && state.camera.center_x === 500);
+  throws(() => ops['map.calibrate']({ image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 2, offset_x: 0, offset_y: 0 })); // cell too small
+  throws(() => ops['map.calibrate']({ image_path: '/x.png', image_w: 100, image_h: 100, cell_size: 50, offset_x: 60, offset_y: 0 })); // offset >= cell
+});
+
+check('tokens live in grid space with bounds; one pc token per character', () => {
+  // grid is floor((1000-10)/50)=19 cols x floor((800-20)/50)=15 rows
+  const tok = ops['token.create']({ label: 'Tharn', kind: 'pc', char_id: heroId, col: 2, row: 3 }).created_token_id;
+  throws(() => ops['token.create']({ label: 'Tharn again', kind: 'pc', char_id: heroId, col: 4, row: 4 })); // dup pc
+  const gob = ops['token.create']({ label: 'Goblin', kind: 'monster', col: 18, row: 14 }).created_token_id;
+  throws(() => ops['token.create']({ label: 'off-map', kind: 'monster', col: 19, row: 0 })); // out of bounds
+  ops['token.move']({ token_id: tok, col: 3, row: 3 });
+  throws(() => ops['token.move']({ token_id: tok, col: -1, row: 3 }));
+  assert.strictEqual(state.tokens.get(tok).col, 3);
+  const glow = ops['token.create']({ label: 'Campfire', kind: 'glow', col: 5, row: 5, glow_color: '#ff8c2e', glow_radius: 3, glow_pulse: 0.5 }).created_token_id;
+  throws(() => ops['token.create']({ label: 'bad glow', kind: 'glow', col: 5, row: 6 })); // missing glow params
+  ops['token.delete']({ token_id: gob });
+  ops['token.delete']({ token_id: glow });
+});
+
+check('camera: view-only transform with zoom rails + bookmarks', () => {
+  ops['camera.update']({ center_x: 300, center_y: 200, zoom: 2, rotation_deg: 90 });
+  assert.strictEqual(state.camera.zoom, 2);
+  throws(() => ops['camera.update']({ center_x: 300, center_y: 200, zoom: 100, rotation_deg: 0 })); // zoom rail
+  throws(() => ops['camera.update']({ center_x: 5000, center_y: 200, zoom: 1, rotation_deg: 0 })); // off-map center
+  // camera never touches token grid coords
+  const tok = [...state.tokens.values()].find((t) => t.char_id === heroId);
+  assert.strictEqual(tok.col, 3);
+  ops['camera.save_bookmark']({ name: 'ambush' });
+  assert.strictEqual(state.camera_bookmarks.length, 1);
+  ops['camera.delete_bookmark']({ name: 'ambush' });
+  throws(() => ops['camera.delete_bookmark']({ name: 'ambush' }));
+});
+
+check('map deactivate + delete clears camera', () => {
+  ops['map.set_active']({ map_id: null });
+  assert.strictEqual(state.camera, null);
+  ops['map.delete']({ map_id: mapId });
+  assert.ok(!state.maps.has(mapId));
+});
+
+check('character.delete cleans initiative + pc tokens', () => {
   ops['character.delete']({ char_id: wizardId });
-  assert.ok(!state.initiative.order.includes(wizardId));
+  assert.ok(!state.initiative.entries.some((e) => e.char_id === wizardId));
+  assert.ok(![...state.tokens.values()].some((t) => t.char_id === wizardId));
 });
 
 console.log(`\nAll ${passed} checks passed. The fire burns true. 🔥`);

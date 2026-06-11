@@ -55,7 +55,31 @@ CREATE TABLE IF NOT EXISTS clock (
 CREATE TABLE IF NOT EXISTS game (
   id                        INTEGER PRIMARY KEY CHECK (id = 1),
   reward_every_n_encounters INTEGER NOT NULL,
-  active_map_id             INTEGER          -- nullable; Phase 3
+  active_map_id             INTEGER          -- nullable; references map_calibration
+);
+
+-- Phase 3: battle map. One row per calibrated map image.
+CREATE TABLE IF NOT EXISTS map_calibration (
+  id         INTEGER PRIMARY KEY,
+  image_path TEXT    NOT NULL,
+  image_w    INTEGER NOT NULL,
+  image_h    INTEGER NOT NULL,
+  cell_size  REAL    NOT NULL,
+  offset_x   REAL    NOT NULL,
+  offset_y   REAL    NOT NULL
+);
+
+-- Phase 3: tokens live in GRID coordinates (col,row) — never pixels/screen.
+CREATE TABLE IF NOT EXISTS token (
+  id          INTEGER PRIMARY KEY,
+  label       TEXT    NOT NULL,
+  kind        TEXT    NOT NULL CHECK (kind IN ('pc','monster','glow','terrain')),
+  char_id     INTEGER REFERENCES character(id) ON DELETE CASCADE,  -- only for kind='pc'
+  col         INTEGER NOT NULL,
+  row         INTEGER NOT NULL,
+  glow_color  TEXT,
+  glow_radius REAL,
+  glow_pulse  REAL
 );
 
 -- Encounter-scoped runtime state (drain, granted blue, initiative). Canonical
@@ -70,7 +94,12 @@ CREATE TABLE IF NOT EXISTS runtime (
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
   .run(config.REWARD_EVERY_N_ENCOUNTERS_DEFAULT);
 db.prepare(`INSERT OR IGNORE INTO runtime (id, json) VALUES (1, ?)`)
-  .run(JSON.stringify({ perChar: {}, initiative: { order: [], turn_char_id: null } }));
+  .run(JSON.stringify({
+    perChar: {},
+    initiative: { entries: [], turn_id: null },
+    camera: null,
+    camera_bookmarks: [],
+  }));
 
 const stmts = {
   insertCharacter: db.prepare(`
@@ -101,6 +130,21 @@ const stmts = {
 
   getGame: db.prepare(`SELECT * FROM game WHERE id=1`),
   updateGame: db.prepare(`UPDATE game SET reward_every_n_encounters=@reward_every_n_encounters, active_map_id=@active_map_id WHERE id=1`),
+
+  insertMap: db.prepare(`
+    INSERT INTO map_calibration (image_path, image_w, image_h, cell_size, offset_x, offset_y)
+    VALUES (@image_path, @image_w, @image_h, @cell_size, @offset_x, @offset_y)`),
+  deleteMap: db.prepare(`DELETE FROM map_calibration WHERE id=?`),
+  allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
+
+  insertToken: db.prepare(`
+    INSERT INTO token (label, kind, char_id, col, row, glow_color, glow_radius, glow_pulse)
+    VALUES (@label, @kind, @char_id, @col, @row, @glow_color, @glow_radius, @glow_pulse)`),
+  updateToken: db.prepare(`
+    UPDATE token SET label=@label, kind=@kind, char_id=@char_id, col=@col, row=@row,
+      glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
+  deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
+  allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 
   getRuntime: db.prepare(`SELECT json FROM runtime WHERE id=1`),
   saveRuntime: db.prepare(`UPDATE runtime SET json=? WHERE id=1`),
