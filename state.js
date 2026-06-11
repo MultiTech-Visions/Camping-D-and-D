@@ -30,6 +30,7 @@ const state = {
   tokens: new Map(),
   camera: null,
   camera_bookmarks: [],
+  custom_colors: [], // GM's saved token colors ('#rrggbb'), persisted in runtime
   // Reported by the display client so the GM minimap can draw the exact
   // projected rectangle. Memory-only: the display re-reports on reconnect.
   display_viewport: null,
@@ -97,6 +98,7 @@ function load() {
 
   state.camera = runtime.camera === undefined ? null : runtime.camera;
   state.camera_bookmarks = Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [];
+  state.custom_colors = Array.isArray(runtime.custom_colors) ? runtime.custom_colors : [];
 
   if (state.game.active_map_id !== null && !state.maps.has(state.game.active_map_id)) {
     throw new Error(`corrupt DB: active_map_id ${state.game.active_map_id} references missing map`);
@@ -113,6 +115,7 @@ function persistRuntime() {
     initiative: state.initiative,
     camera: state.camera,
     camera_bookmarks: state.camera_bookmarks,
+    custom_colors: state.custom_colors,
   }));
 }
 
@@ -169,6 +172,12 @@ function assertOnGrid(col, row, map) {
 function assertFiniteNumber(value, name) {
   R.assert(typeof value === 'number' && Number.isFinite(value), `${name} must be a finite number, got ${JSON.stringify(value)}`);
   return value;
+}
+
+function assertHexColor(value, name) {
+  R.assert(typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value),
+    `${name} must be a '#rrggbb' color, got ${JSON.stringify(value)}`);
+  return value.toLowerCase();
 }
 
 function assertCalibrationSane(row) {
@@ -527,6 +536,8 @@ const ops = {
       kind,
       char_id: null,
       col: p.col, row: p.row,
+      // creation default by kind — overridable per token (assertHexColor on either path)
+      color: p.color === undefined ? config.TOKEN_DEFAULT_COLORS[kind] : assertHexColor(p.color, 'color'),
       glow_color: null, glow_radius: null, glow_pulse: null,
     };
     assertOnGrid(p.col, p.row, map);
@@ -537,7 +548,7 @@ const ops = {
       row.char_id = c.id;
     }
     if (kind === 'glow') {
-      row.glow_color = R.assertNonEmptyString(p.glow_color, 'glow_color');
+      row.glow_color = row.color; // the glow IS the color
       row.glow_radius = assertFiniteNumber(p.glow_radius, 'glow_radius');
       R.assert(row.glow_radius > 0 && row.glow_radius <= 20, 'glow_radius must be in (0, 20] cells');
       row.glow_pulse = assertFiniteNumber(p.glow_pulse, 'glow_pulse');
@@ -547,6 +558,13 @@ const ops = {
     const id = Number(info.lastInsertRowid);
     state.tokens.set(id, { ...row, id });
     return { created_token_id: id };
+  },
+
+  'token.set_color'(p) {
+    const t = getToken(p.token_id);
+    t.color = assertHexColor(p.color, 'color');
+    if (t.kind === 'glow') t.glow_color = t.color;
+    stmts.updateToken.run(t);
   },
 
   'token.move'(p) {
@@ -603,6 +621,24 @@ const ops = {
     state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.name !== name);
     persistRuntime();
   },
+
+  // GM's saved token colors — a small personal palette that survives restarts.
+  'palette.save_color'(p) {
+    const color = assertHexColor(p.color, 'color');
+    if (!state.custom_colors.includes(color)) {
+      R.assert(state.custom_colors.length < config.CUSTOM_COLOR_LIMIT,
+        `palette is full (${config.CUSTOM_COLOR_LIMIT}) — delete a saved color first`);
+      state.custom_colors.push(color);
+      persistRuntime();
+    }
+  },
+
+  'palette.delete_color'(p) {
+    const color = assertHexColor(p.color, 'color');
+    R.assert(state.custom_colors.includes(color), `'${color}' is not in the saved palette`);
+    state.custom_colors = state.custom_colors.filter((c) => c !== color);
+    persistRuntime();
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -657,6 +693,7 @@ function snapshotFor(role, charId) {
       CONDITIONS: config.CONDITIONS,
       CLOCK_SEGMENT_CHOICES: config.CLOCK_SEGMENT_CHOICES,
       TOKEN_KINDS: config.TOKEN_KINDS,
+      TOKEN_DEFAULT_COLORS: config.TOKEN_DEFAULT_COLORS,
       DND: config.DND,
     },
   };
@@ -667,6 +704,7 @@ function snapshotFor(role, charId) {
       clocks: clocks.map((c) => ({ ...c })),
       maps: [...state.maps.values()].map((m) => ({ ...m })),
       camera_bookmarks: state.camera_bookmarks.map((b) => ({ ...b })),
+      custom_colors: [...state.custom_colors],
     };
   }
   if (role === 'player') {

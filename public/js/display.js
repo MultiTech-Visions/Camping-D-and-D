@@ -75,7 +75,9 @@
     mapRoot.innerHTML = '';
   }
 
-  const KIND_COLORS = { pc: 0x3e8ed0, monster: 0xc43c34, terrain: 0x6b6b6b };
+  function hexToNum(color) {
+    return Number(`0x${color.replace('#', '')}`);
+  }
 
   function renderMap(snap) {
     ensurePixi();
@@ -130,7 +132,7 @@
 
       if (tok.kind === 'glow') {
         const g = new PIXI.Graphics();
-        const color = Number(`0x${tok.glow_color.replace('#', '')}`);
+        const color = hexToNum(tok.glow_color);
         const radius = tok.glow_radius * map.cell_size;
         for (let i = 5; i >= 1; i--) {
           g.beginFill(color, 0.18);
@@ -156,7 +158,7 @@
       } else {
         disc.lineStyle(2, 0x000000, 0.8);
       }
-      disc.beginFill(KIND_COLORS[tok.kind], dead ? 0.35 : 0.95);
+      disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
       disc.drawCircle(0, 0, r);
       disc.endFill();
       holder.addChild(disc);

@@ -268,6 +268,27 @@ check('camera: view-only transform with zoom rails + bookmarks', () => {
   throws(() => ops['camera.delete_bookmark']({ name: 'ambush' }));
 });
 
+check('token colors + saved palette', () => {
+  // default by kind, custom on create, recolor after
+  const ogre = ops['token.create']({ label: 'Ogre', kind: 'monster', col: 1, row: 1 }).created_token_id;
+  assert.strictEqual(state.tokens.get(ogre).color, '#c43c34');
+  const wisp = ops['token.create']({ label: 'Wisp', kind: 'glow', col: 2, row: 2, color: '#66CCFF', glow_radius: 2, glow_pulse: 1 }).created_token_id;
+  assert.strictEqual(state.tokens.get(wisp).color, '#66ccff');
+  assert.strictEqual(state.tokens.get(wisp).glow_color, '#66ccff'); // glow mirrors color
+  ops['token.set_color']({ token_id: ogre, color: '#112233' });
+  assert.strictEqual(state.tokens.get(ogre).color, '#112233');
+  throws(() => ops['token.set_color']({ token_id: ogre, color: 'red' })); // not #rrggbb
+  throws(() => ops['token.create']({ label: 'bad', kind: 'monster', col: 1, row: 2, color: '#12' }));
+
+  ops['palette.save_color']({ color: '#112233' });
+  ops['palette.save_color']({ color: '#112233' }); // idempotent
+  assert.deepStrictEqual(state.custom_colors, ['#112233']);
+  ops['palette.delete_color']({ color: '#112233' });
+  throws(() => ops['palette.delete_color']({ color: '#112233' })); // already gone
+  ops['token.delete']({ token_id: ogre });
+  ops['token.delete']({ token_id: wisp });
+});
+
 check('display viewport report (for the GM minimap projection box)', () => {
   ops['display.report_viewport']({ width: 1920, height: 1080 });
   assert.deepStrictEqual(state.display_viewport, { width: 1920, height: 1080 });
