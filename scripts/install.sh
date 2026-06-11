@@ -68,18 +68,21 @@ say "Quick self-test of the rules engine + database…"
 node test/smoke.js --quick || fail "self-test failed — see the log above"
 ok "Self-test passed"
 
-# --- 4. systemd service (auto-start on boot, restart on crash) ----------------
+# --- 4. systemd service (managed by the Start/Stop icons; restart on crash) ---
+# Deliberately NOT enabled at boot — this Pi does other jobs too. The server
+# only runs when you double-click 🔥 Start, and stays off after a reboot.
 SERVICE_NAME="campfire-saga"
 say "Setting up the background service (you may be asked for your password)…"
 sed -e "s|__USER__|$USER|g" -e "s|__DIR__|$APP_DIR|g" \
   "$APP_DIR/systemd/campfire-saga.service" | sudo tee "/etc/systemd/system/$SERVICE_NAME.service" >/dev/null \
   || fail "could not write the service file"
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"
-sudo systemctl enable "$SERVICE_NAME" || fail "could not enable the service"
+# Undo any boot-autostart left behind by an older install.
+sudo systemctl disable "$SERVICE_NAME" 2>/dev/null
 sudo systemctl restart "$SERVICE_NAME" || fail "could not start the service"
 sleep 2
 systemctl is-active --quiet "$SERVICE_NAME" \
-  && ok "Server is running and will start automatically on every boot" \
+  && ok "Server is running NOW (it will NOT auto-start on boot — use the 🔥 Start icon)" \
   || fail "service did not stay running — check logs/server.log"
 
 # --- 5. Desktop icons ----------------------------------------------------------

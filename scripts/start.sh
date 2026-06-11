@@ -14,7 +14,7 @@ if systemctl list-unit-files campfire-saga.service --no-legend 2>/dev/null | gre
   sleep 2
   systemctl is-active --quiet campfire-saga || fail "server did not stay up — last server log lines:
 $(tail -n 30 logs/server.log 2>/dev/null)"
-  ok "Server is running (and survives reboots)"
+  ok "Server is running (until you Stop it or the Pi powers off — it does not auto-start on boot)"
   print_urls
   echo "   Recent server activity:"
   tail -n 12 logs/server.log 2>/dev/null | sed 's/^/      /'

@@ -38,12 +38,16 @@ npm install --no-audit --no-fund || fail "npm install failed — see log above"
 say "Running self-test…"
 node test/smoke.js --quick || fail "self-test failed after update — see log above"
 
-if systemctl list-unit-files campfire-saga.service --no-legend 2>/dev/null | grep -q campfire-saga; then
-  say "Restarting the server…"
+# Only restart the server if it was already running — if it was off, it stays
+# off (this Pi has other jobs; nothing auto-starts).
+if systemctl is-active --quiet campfire-saga 2>/dev/null; then
+  say "Server was running — restarting it on the new version…"
   sudo systemctl restart campfire-saga || fail "could not restart the service"
   sleep 2
   systemctl is-active --quiet campfire-saga || fail "server did not come back up — check logs/server.log"
   ok "Server restarted on the new version"
+else
+  say "Server is not running — leaving it off. Double-click 🔥 Start when you want it."
 fi
 
 ok "UPDATE COMPLETE"

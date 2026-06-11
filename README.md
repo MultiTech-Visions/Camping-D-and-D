@@ -39,12 +39,12 @@ The installer puts these icons on your Desktop:
 | 📶 **Campsite WiFi Hotspot** | Toggles the Pi's own WiFi network (`CampfireSaga` / password `tellmeastory`) |
 | 📽 **Projector Display** | Opens the shared display full-screen for the HDMI projector |
 
-The server also **starts itself automatically every time the Pi powers on** — at the
-campsite you usually just plug in the Pi, tap the Hotspot icon, and play.
+The server **never starts on its own** — this Pi has other jobs, so nothing runs at
+boot. Double-click 🔥 Start when it's game time, 🛑 Stop when you're done.
 
 ## 🏕 At the campsite
 
-1. Power the Pi. The server starts by itself.
+1. Power the Pi and double-click **🔥 Start Campfire Saga**.
 2. Double-click **📶 Campsite WiFi Hotspot**. Phones join WiFi **CampfireSaga**
    (password **tellmeastory**).
 3. Phones browse to **http://10.42.0.1:3000** (the Hotspot window shows the exact
