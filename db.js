@@ -60,13 +60,15 @@ CREATE TABLE IF NOT EXISTS game (
 
 -- Phase 3: battle map. One row per calibrated map image.
 CREATE TABLE IF NOT EXISTS map_calibration (
-  id         INTEGER PRIMARY KEY,
-  image_path TEXT    NOT NULL,
-  image_w    INTEGER NOT NULL,
-  image_h    INTEGER NOT NULL,
-  cell_size  REAL    NOT NULL,
-  offset_x   REAL    NOT NULL,
-  offset_y   REAL    NOT NULL
+  id           INTEGER PRIMARY KEY,
+  name         TEXT    NOT NULL,
+  image_path   TEXT    NOT NULL,
+  image_w      INTEGER NOT NULL,
+  image_h      INTEGER NOT NULL,
+  cell_size    REAL    NOT NULL,
+  offset_x     REAL    NOT NULL,
+  offset_y     REAL    NOT NULL,
+  grid_visible INTEGER NOT NULL DEFAULT 1   -- overlay the calibrated grid (off for pre-gridded art)
 );
 
 -- Phase 3: tokens live in GRID coordinates (col,row) — never pixels/screen.
@@ -90,6 +92,16 @@ CREATE TABLE IF NOT EXISTS runtime (
   json TEXT NOT NULL
 );
 `);
+
+// Migrations for databases created before these columns existed.
+const mapCols = db.prepare(`PRAGMA table_info(map_calibration)`).all();
+if (!mapCols.some((c) => c.name === 'grid_visible')) {
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN grid_visible INTEGER NOT NULL DEFAULT 1`);
+}
+if (!mapCols.some((c) => c.name === 'name')) {
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN name TEXT NOT NULL DEFAULT ''`);
+  db.exec(`UPDATE map_calibration SET name = 'Map ' || id WHERE name = ''`);
+}
 
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
   .run(config.REWARD_EVERY_N_ENCOUNTERS_DEFAULT);
@@ -132,8 +144,11 @@ const stmts = {
   updateGame: db.prepare(`UPDATE game SET reward_every_n_encounters=@reward_every_n_encounters, active_map_id=@active_map_id WHERE id=1`),
 
   insertMap: db.prepare(`
-    INSERT INTO map_calibration (image_path, image_w, image_h, cell_size, offset_x, offset_y)
-    VALUES (@image_path, @image_w, @image_h, @cell_size, @offset_x, @offset_y)`),
+    INSERT INTO map_calibration (name, image_path, image_w, image_h, cell_size, offset_x, offset_y, grid_visible)
+    VALUES (@name, @image_path, @image_w, @image_h, @cell_size, @offset_x, @offset_y, @grid_visible)`),
+  setMapGridVisible: db.prepare(`UPDATE map_calibration SET grid_visible=? WHERE id=?`),
+  renameMap: db.prepare(`UPDATE map_calibration SET name=? WHERE id=?`),
+  updateMapCalibration: db.prepare(`UPDATE map_calibration SET cell_size=?, offset_x=?, offset_y=? WHERE id=?`),
   deleteMap: db.prepare(`DELETE FROM map_calibration WHERE id=?`),
   allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
 

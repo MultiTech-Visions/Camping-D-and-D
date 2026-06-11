@@ -188,9 +188,14 @@
   // --- battle map manager (Phase 3) -------------------------------------------
   // Calibration + token + camera state that must survive re-renders:
   const mapUI = {
-    upload: null,      // {image_path, image_w, image_h} awaiting calibration
-    taps: [],          // calibration taps in image pixels
-    viewScale: 0.25,   // calibration preview zoom
+    upload: null,        // {image_path, image_w, image_h} awaiting calibration
+    editingMapId: null,  // set when re-calibrating an existing map
+    name: '',            // map name being typed
+    taps: [],            // calibration taps in image pixels
+    viewScale: 0.25,     // calibration preview zoom
+    scroll: { left: 0, top: 0 }, // preview scroll position, preserved across re-renders
+    cellsAcross: 5,
+    cellsDown: 5,
     selectedToken: null,
   };
 
@@ -199,6 +204,25 @@
     if (mapUI.upload) {
       box.appendChild(calibrationUI());
     } else if (snap.map) {
+      const head = el(`<div class="btn-row"></div>`);
+      head.appendChild(el(`<strong style="flex:1">🗺 ${esc(snap.map.name)}</strong>`));
+      const rename = el(`<button class="mini ghost" title="rename this map">✎ rename</button>`);
+      rename.onclick = () => {
+        const name = prompt('Map name:', snap.map.name);
+        if (name && name.trim()) conn.action('map.rename', { map_id: snap.map.id, name: name.trim() });
+      };
+      const recal = el(`<button class="mini ghost" title="re-do the two-tap grid calibration">📐 fix grid</button>`);
+      recal.onclick = () => {
+        mapUI.upload = { image_path: snap.map.image_path, image_w: snap.map.image_w, image_h: snap.map.image_h };
+        mapUI.editingMapId = snap.map.id;
+        mapUI.name = snap.map.name;
+        mapUI.taps = [];
+        mapUI.viewScale = Math.min(1, 700 / snap.map.image_w);
+        mapUI.scroll = { left: 0, top: 0 };
+        render();
+      };
+      head.append(rename, recal);
+      box.appendChild(head);
       box.appendChild(cameraRemote());
       box.appendChild(tokenManager());
       const foot = el(`<div class="btn-row"></div>`);
@@ -209,16 +233,21 @@
       box.appendChild(foot);
     } else {
       box.appendChild(el(`<p class="muted small">No map active — the projector shows the campfire roster. Upload a battle map to switch.</p>`));
-      const row = el(`<div class="btn-row"></div>`);
-      row.appendChild(uploadButton('📤 Upload map image'));
+      box.appendChild(uploadButton('📤 Upload map image'));
       for (const m of snap.maps) {
-        const use = el(`<button class="mini">use map #${m.id}</button>`);
+        const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
+        const use = el(`<button class="mini" style="flex:1;text-align:left">🗺 ${esc(m.name)}</button>`);
         use.onclick = () => conn.action('map.set_active', { map_id: m.id });
+        const rename = el(`<button class="mini ghost" title="rename">✎</button>`);
+        rename.onclick = () => {
+          const name = prompt('Map name:', m.name);
+          if (name && name.trim()) conn.action('map.rename', { map_id: m.id, name: name.trim() });
+        };
         const del = el(`<button class="mini danger ghost">✕</button>`);
-        del.onclick = () => { if (confirm(`Delete stored map #${m.id}?`)) conn.action('map.delete', { map_id: m.id }); };
-        row.append(use, del);
+        del.onclick = () => { if (confirm(`Delete “${m.name}”?`)) conn.action('map.delete', { map_id: m.id }); };
+        row.append(use, rename, del);
+        box.appendChild(row);
       }
-      box.appendChild(row);
     }
     return box;
   }
@@ -246,8 +275,11 @@
         return;
       }
       mapUI.upload = await res.json();
+      mapUI.editingMapId = null;
+      mapUI.name = f.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'New map';
       mapUI.taps = [];
       mapUI.viewScale = Math.min(1, 700 / mapUI.upload.image_w);
+      mapUI.scroll = { left: 0, top: 0 };
       render();
     };
     wrap.append(btn, file);
@@ -256,23 +288,35 @@
 
   function calibrationUI() {
     const u = mapUI.upload;
+    const editing = mapUI.editingMapId !== null;
     const box = el(`<div></div>`);
     box.appendChild(el(`<div class="banner small">
-      <strong>Calibrate the grid</strong> — find a clean span of map squares.
+      <strong>${editing ? `Re-calibrating “${esc(mapUI.name)}”` : 'Calibrate the grid'}</strong> — find a clean span of map squares.
       Tap its <strong>top-left corner</strong>, then the <strong>bottom-right corner</strong>.
       The wider the span, the more accurate. Set how many cells the span covers below.</div>`));
 
+    if (!editing) {
+      const nameRow = el(`<div class="btn-row"></div>`);
+      const nameIn = el(`<input type="text" placeholder="map name" maxlength="40" style="max-width:240px">`);
+      nameIn.value = mapUI.name;
+      nameIn.oninput = () => { mapUI.name = nameIn.value; };
+      nameRow.append(el(`<span class="small">name:</span>`), nameIn);
+      box.appendChild(nameRow);
+    }
+
     const sizeRow = el(`<div class="btn-row"></div>`);
-    const across = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
-    const down = el(`<input type="number" data-live="1" value="5" min="1" max="100" style="width:70px;text-align:center">`);
+    const across = el(`<input type="number" data-live="1" min="1" max="100" style="width:70px;text-align:center">`);
+    const down = el(`<input type="number" data-live="1" min="1" max="100" style="width:70px;text-align:center">`);
+    across.value = mapUI.cellsAcross;
+    down.value = mapUI.cellsDown;
+    across.onchange = () => { mapUI.cellsAcross = Number(across.value); };
+    down.onchange = () => { mapUI.cellsDown = Number(down.value); };
     sizeRow.append(el(`<span class="small">cells across:</span>`), across, el(`<span class="small">cells down:</span>`), down);
     const zoomOut = el(`<button class="mini">−🔎</button>`);
     const zoomIn = el(`<button class="mini">+🔎</button>`);
-    zoomOut.onclick = () => { mapUI.viewScale = Math.max(0.05, mapUI.viewScale / 1.4); render(); };
-    zoomIn.onclick = () => { mapUI.viewScale = Math.min(3, mapUI.viewScale * 1.4); render(); };
     sizeRow.append(zoomOut, zoomIn);
     const cancel = el(`<button class="mini ghost">cancel</button>`);
-    cancel.onclick = () => { mapUI.upload = null; mapUI.taps = []; render(); };
+    cancel.onclick = () => { mapUI.upload = null; mapUI.editingMapId = null; mapUI.taps = []; render(); };
     sizeRow.appendChild(cancel);
     box.appendChild(sizeRow);
 
@@ -283,13 +327,41 @@
     for (const t of mapUI.taps) {
       holder.appendChild(el(`<div style="position:absolute;left:${t.x * mapUI.viewScale - 7}px;top:${t.y * mapUI.viewScale - 7}px;width:14px;height:14px;border-radius:50%;border:3px solid var(--ember);pointer-events:none"></div>`));
     }
+
+    // Keep the view where the GM left it: remember scrolling continuously and
+    // restore after every re-render (taps and zooms used to bounce the view
+    // back to the top-left corner — maddening on a big map).
+    scroller.addEventListener('scroll', () => {
+      mapUI.scroll = { left: scroller.scrollLeft, top: scroller.scrollTop };
+    }, { passive: true });
+    requestAnimationFrame(() => {
+      scroller.scrollLeft = mapUI.scroll.left;
+      scroller.scrollTop = mapUI.scroll.top;
+    });
+
+    // Zoom around the center of what's currently on screen, not the corner.
+    const zoomBy = (factor) => {
+      const oldScale = mapUI.viewScale;
+      const newScale = Math.min(3, Math.max(0.05, oldScale * factor));
+      const cx = scroller.scrollLeft + scroller.clientWidth / 2;
+      const cy = scroller.scrollTop + scroller.clientHeight / 2;
+      mapUI.scroll = {
+        left: Math.max(0, (cx * newScale) / oldScale - scroller.clientWidth / 2),
+        top: Math.max(0, (cy * newScale) / oldScale - scroller.clientHeight / 2),
+      };
+      mapUI.viewScale = newScale;
+      render();
+    };
+    zoomOut.onclick = () => zoomBy(1 / 1.4);
+    zoomIn.onclick = () => zoomBy(1.4);
+
     img.onclick = (ev) => {
       const r = img.getBoundingClientRect();
       const x = (ev.clientX - r.left) / mapUI.viewScale;
       const y = (ev.clientY - r.top) / mapUI.viewScale;
       mapUI.taps.push({ x, y });
       if (mapUI.taps.length === 2) {
-        finishCalibration(Number(across.value), Number(down.value));
+        finishCalibration(mapUI.cellsAcross, mapUI.cellsDown);
       } else {
         render();
       }
@@ -312,13 +384,23 @@
       render();
       return;
     }
-    conn.action('map.calibrate', {
-      image_path: u.image_path, image_w: u.image_w, image_h: u.image_h,
-      cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
-    });
+    if (mapUI.editingMapId !== null) {
+      conn.action('map.update_calibration', {
+        map_id: mapUI.editingMapId,
+        cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
+      });
+      conn.toast('Grid re-calibrated! Check it with ▦ grid on.', true);
+    } else {
+      conn.action('map.calibrate', {
+        name: mapUI.name.trim() || 'New map',
+        image_path: u.image_path, image_w: u.image_w, image_h: u.image_h,
+        cell_size: cell, offset_x: x0 % cell, offset_y: y0 % cell,
+      });
+      conn.toast('Map calibrated and live on the projector! 🗺', true);
+    }
     mapUI.upload = null;
+    mapUI.editingMapId = null;
     mapUI.taps = [];
-    conn.toast('Map calibrated and live on the projector! 🗺', true);
   }
 
   function cameraRemote() {
@@ -336,17 +418,39 @@
       });
     };
 
-    // minimap: tap anywhere to point the camera there
+    // minimap: tap anywhere to point the camera there; shows every token so
+    // the GM sees the whole board at a glance (the full render is /display)
     const mini = el(`<div style="position:relative;max-width:300px;cursor:crosshair"></div>`);
     const miniImg = el(`<img src="${map.image_path}" style="width:100%;display:block;border:1px solid var(--line);border-radius:8px" draggable="false">`);
     mini.appendChild(miniImg);
-    const dot = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:12px;height:12px;margin:-6px;border-radius:50%;border:2px solid var(--ember);background:rgba(255,140,46,.4);pointer-events:none"></div>`);
-    mini.appendChild(dot);
+
+    const TOKEN_DOT = { pc: '#3e8ed0', monster: '#c43c34', terrain: '#8a8a8a', glow: '#f0b429' };
+    for (const t of snap.tokens) {
+      const c = CampfireMap.cellCenter(map, t.col, t.row);
+      const selected = mapUI.selectedToken === t.id;
+      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:10px;height:10px;margin:-5px;border-radius:50%;background:${TOKEN_DOT[t.kind]};border:2px solid ${selected ? 'var(--ember)' : '#000'};pointer-events:none;z-index:2"></div>`));
+    }
+
+    // What the projector is actually showing: the real viewport rectangle,
+    // sized from the display's reported screen ÷ zoom, rotated with the
+    // camera. Falls back to a small frame if no display is connected yet.
+    const vp = snap.display_viewport;
+    if (vp) {
+      const wPct = (vp.width / cam.zoom / map.image_w) * 100;
+      const hPct = (vp.height / cam.zoom / map.image_h) * 100;
+      mini.style.overflow = 'hidden';
+      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`));
+    } else {
+      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+    }
+
     miniImg.onclick = (ev) => {
       const r = miniImg.getBoundingClientRect();
       send({ ...cam, center_x: ((ev.clientX - r.left) / r.width) * map.image_w, center_y: ((ev.clientY - r.top) / r.height) * map.image_h });
     };
     box.appendChild(mini);
+    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
+      The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
 
     const pan = map.cell_size * 2;
     const ctl = el(`<div class="btn-row"></div>`);
@@ -355,38 +459,66 @@
       b.onclick = fn;
       return b;
     };
+    // Nudges are SCREEN-relative: with the map rotated 90°, "up" means up on
+    // the projector, not up in image pixels — so rotate the pan vector by the
+    // inverse of the camera rotation before applying it in image space.
+    const nudge = (sx, sy) => {
+      const th = (cam.rotation_deg * Math.PI) / 180;
+      send({
+        ...cam,
+        center_x: cam.center_x + (sx * Math.cos(th) + sy * Math.sin(th)) * pan,
+        center_y: cam.center_y + (-sx * Math.sin(th) + sy * Math.cos(th)) * pan,
+      });
+    };
     ctl.append(
-      mk('◀', () => send({ ...cam, center_x: cam.center_x - pan }), 'nudge left'),
-      mk('▲', () => send({ ...cam, center_y: cam.center_y - pan }), 'nudge up'),
-      mk('▼', () => send({ ...cam, center_y: cam.center_y + pan }), 'nudge down'),
-      mk('▶', () => send({ ...cam, center_x: cam.center_x + pan }), 'nudge right'),
+      mk('◀', () => nudge(-1, 0), 'nudge left (as seen on the projector)'),
+      mk('▲', () => nudge(0, -1), 'nudge up (as seen on the projector)'),
+      mk('▼', () => nudge(0, 1), 'nudge down (as seen on the projector)'),
+      mk('▶', () => nudge(1, 0), 'nudge right (as seen on the projector)'),
       mk('+🔎', () => send({ ...cam, zoom: cam.zoom * 1.3 }), 'zoom in'),
       mk('−🔎', () => send({ ...cam, zoom: cam.zoom / 1.3 }), 'zoom out'),
       mk('⟲', () => send({ ...cam, rotation_deg: cam.rotation_deg - 15 }), 'rotate left'),
       mk('⟳', () => send({ ...cam, rotation_deg: cam.rotation_deg + 15 }), 'rotate right'),
       mk('🎯', () => send({ center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 }), 'reset view'),
     );
+    ctl.appendChild(el(`<span class="muted small">zoom ${Math.round(cam.zoom * 100)}%${cam.rotation_deg ? ` · ${cam.rotation_deg}°` : ''}</span>`));
+    const gridBtn = el(`<button class="mini ${map.grid_visible ? '' : 'ghost'}" title="overlay the calibrated grid on the projector">▦ grid ${map.grid_visible ? 'on' : 'off'}</button>`);
+    gridBtn.onclick = () => conn.action('map.set_grid_visible', { map_id: map.id, visible: !map.grid_visible });
+    ctl.appendChild(gridBtn);
     box.appendChild(ctl);
 
-    // bookmarks: saved views to snap to mid-session
+    // bookmarks: saved views to snap to mid-session — save field on top,
+    // the list of saved views rendered underneath it
     const bm = el(`<div class="btn-row"></div>`);
-    const bmName = el(`<input type="text" placeholder="view name" style="max-width:130px" maxlength="20">`);
-    const bmSave = el(`<button class="mini">📌 save view</button>`);
-    bmSave.onclick = () => {
+    const bmName = el(`<input type="text" placeholder="view name (e.g. ambush)" style="max-width:180px" maxlength="20">`);
+    const bmSave = el(`<button class="mini">📌 save this view</button>`);
+    const saveView = () => {
       if (bmName.value.trim()) {
         conn.action('camera.save_bookmark', { name: bmName.value.trim() });
         bmName.value = '';
       }
     };
+    bmSave.onclick = saveView;
+    bmName.onkeydown = (ev) => { if (ev.key === 'Enter') saveView(); };
     bm.append(bmName, bmSave);
-    for (const b of snap.camera_bookmarks) {
-      const go = el(`<button class="mini ghost">${esc(b.name)}</button>`);
-      go.onclick = () => send(b);
-      const del = el(`<button class="mini danger ghost" title="delete bookmark">✕</button>`);
-      del.onclick = () => conn.action('camera.delete_bookmark', { name: b.name });
-      bm.append(go, del);
-    }
     box.appendChild(bm);
+
+    if (snap.camera_bookmarks.length > 0) {
+      const list = el(`<div style="margin-top:4px"></div>`);
+      list.appendChild(el(`<div class="muted small">Saved views — tap to jump:</div>`));
+      for (const b of snap.camera_bookmarks) {
+        const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
+        const go = el(`<button class="mini" style="flex:1;text-align:left">🎥 ${esc(b.name)} <span class="muted small">(${Math.round(b.zoom * 100)}%${b.rotation_deg ? ` · ${b.rotation_deg}°` : ''})</span></button>`);
+        go.onclick = () => send(b);
+        const overwrite = el(`<button class="mini ghost" title="re-save this view as the current camera">update</button>`);
+        overwrite.onclick = () => conn.action('camera.save_bookmark', { name: b.name });
+        const del = el(`<button class="mini danger ghost" title="delete this view">✕</button>`);
+        del.onclick = () => conn.action('camera.delete_bookmark', { name: b.name });
+        row.append(go, overwrite, del);
+        list.appendChild(row);
+      }
+      box.appendChild(list);
+    }
     return box;
   }
 
@@ -524,7 +656,15 @@
         n.hp = Math.max(0, n.hp - d);
       });
       heal.onclick = () => send((n) => { n.hp = Math.min(n.hp_max, n.hp + Number(amt.value)); });
-      ctl.append(amt, dmg, heal);
+      const fullHeal = el(`<button class="mini" title="full HP, death saves cleared, spell slots restored — like the campfire refill">🌙 full heal</button>`);
+      fullHeal.onclick = () => send((n) => {
+        n.hp = n.hp_max;
+        n.temp_hp = 0;
+        n.death_successes = 0;
+        n.death_failures = 0;
+        for (const slot of n.spell_slots) slot.used = 0;
+      });
+      ctl.append(amt, dmg, heal, fullHeal);
       card.appendChild(ctl);
     }
 
