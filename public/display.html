@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga — Display</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="display-mode">
+<canvas id="embers"></canvas>
+<div class="display-grid">
+  <div class="display-main">
+    <h1 id="d-title">🔥 Campfire Saga</h1>
+    <div id="d-turn" class="turn-banner"></div>
+    <div id="d-clocks" style="display:flex;flex-wrap:wrap;justify-content:center"></div>
+  </div>
+  <aside class="display-roster" id="d-roster"></aside>
+</div>
+<script src="/js/ws-client.js"></script>
+<script src="/js/dice.js"></script>
+<script src="/js/display.js"></script>
+</body>
+</html>

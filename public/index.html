@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="site-head">
+    <div class="flame">🔥</div>
+    <h1>Campfire Saga</h1>
+    <p class="subtitle">Gather round. The fire is lit and the story is waiting.</p>
+    <nav class="nav">
+      <a href="/" class="active">Characters</a>
+      <a href="/learn">How to Play</a>
+      <a href="/dm">GM Screen</a>
+      <a href="/display">Projector</a>
+    </nav>
+  </header>
+
+  <div class="banner">
+    <strong>Pick your character</strong> to open your sheet, or forge a new hero.
+  </div>
+
+  <div id="char-list" class="card-grid"></div>
+
+  <div class="btn-row" style="margin-top:18px">
+    <button class="primary" id="new-campfire">⚔ New Campfire Saga hero</button>
+    <button id="new-dnd">🐉 New D&amp;D 5e character</button>
+  </div>
+  <p class="muted small">Campfire Saga is the homebrew narrative-dice game (see <a href="/learn">How to Play</a>).
+  The D&amp;D sheet works for fifth edition or any d20-style game.</p>
+</div>
+
+<script src="/js/ws-client.js"></script>
+<script src="/js/dice.js"></script>
+<script>
+'use strict';
+const list = document.getElementById('char-list');
+
+CampfireWS.connect({
+  role: 'player',
+  onSnapshot(snap) {
+    list.innerHTML = '';
+    if (snap.characters.length === 0) {
+      list.innerHTML = '<p class="muted">No heroes yet. Be the first around the fire.</p>';
+      return;
+    }
+    for (const c of snap.characters) {
+      const card = document.createElement('div');
+      card.className = 'card' + (c.conditions.some(x => x.kind === 'dead') ? ' is-dead' : '');
+      const sys = c.system === 'campfire' ? '🔥 Campfire Saga' : '🐉 D&D 5e';
+      card.innerHTML = `<div class="card-head"><h3>${esc(c.name)}</h3><span class="muted small">${sys}</span></div>
+        <p class="muted">${esc(c.concept)}</p>`;
+      const btn = document.createElement('button');
+      btn.className = 'primary';
+      btn.textContent = 'This is me';
+      btn.onclick = () => {
+        localStorage.setItem('campfire_char_id', String(c.id));
+        location.href = '/play';
+      };
+      card.appendChild(btn);
+      list.appendChild(card);
+    }
+  },
+});
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+document.getElementById('new-campfire').onclick = () => {
+  localStorage.removeItem('campfire_char_id');
+  location.href = '/play?new=campfire';
+};
+document.getElementById('new-dnd').onclick = () => {
+  localStorage.removeItem('campfire_char_id');
+  location.href = '/play?new=dnd5e';
+};
+</script>
+</body>
+</html>

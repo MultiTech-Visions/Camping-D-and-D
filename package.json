@@ -1,0 +1,19 @@
+{
+  "name": "campfire-saga",
+  "version": "1.0.0",
+  "description": "Self-hosted companion app for the Campfire Saga narrative-dice tabletop RPG. Runs on a Raspberry Pi 5 at a campsite with no internet.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

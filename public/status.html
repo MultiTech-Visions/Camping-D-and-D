@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga — System</title>
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  /* This is the Pi's own glanceable sign — big, readable from across the room. */
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 1100px; margin: 0 auto; }
+  .qr-card { text-align: center; padding: 22px; }
+  .qr-card .qr { display: inline-block; background: #fff; padding: 14px; border-radius: 12px; margin: 12px 0; }
+  .qr-card .big { font-size: 1.5rem; }
+  .url-line { font-size: 1.3rem; color: var(--gold); word-break: break-all; }
+  .who { display: flex; gap: 18px; justify-content: center; font-size: 1.1rem; flex-wrap: wrap; }
+  @media (max-width: 800px) { .status-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:1100px">
+  <header class="site-head">
+    <div class="flame">🔥</div>
+    <h1>Campfire Saga is ON</h1>
+    <p class="subtitle">This is just the Pi's system screen — the game lives on your phones.
+    Feel free to turn this display off.</p>
+  </header>
+
+  <div class="status-grid">
+    <div class="card qr-card">
+      <h2 style="margin-top:0;border:none">1 · Join the WiFi</h2>
+      <div id="wifi-area"><p class="muted">checking…</p></div>
+    </div>
+    <div class="card qr-card">
+      <h2 style="margin-top:0;border:none">2 · Open the game</h2>
+      <div id="game-area"><p class="muted">checking…</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="who" id="who">…</div>
+  </div>
+
+  <div class="btn-row" style="justify-content:center">
+    <a href="/display"><button class="primary">📽 Switch this screen to the projector display</button></a>
+    <a href="/dm"><button>🜲 GM screen</button></a>
+    <a href="/learn"><button class="ghost">📖 How to play</button></a>
+  </div>
+</div>
+<script src="/vendor/qrcode.min.js"></script>
+<script src="/js/status.js"></script>
+</body>
+</html>

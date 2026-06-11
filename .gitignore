@@ -1,0 +1,12 @@
+# Dependencies are installed ON the Pi by install.sh (native modules must match the Pi's CPU)
+node_modules/
+
+# Live game data — never overwritten by updates
+data/
+
+# Run logs (install / start / update / server) — local to each machine
+logs/
+
+# OS noise
+.DS_Store
+Thumbs.db
