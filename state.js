@@ -426,6 +426,7 @@ const ops = {
       cell_size: assertFiniteNumber(p.cell_size, 'cell_size'),
       offset_x: assertFiniteNumber(p.offset_x, 'offset_x'),
       offset_y: assertFiniteNumber(p.offset_y, 'offset_y'),
+      grid_visible: 1,
     };
     R.assert(row.cell_size >= 4, `cell_size must be at least 4 image pixels, got ${row.cell_size}`);
     R.assert(row.offset_x >= 0 && row.offset_x < row.cell_size, 'offset_x must be within [0, cell_size)');
@@ -452,6 +453,16 @@ const ops = {
     }
     stmts.updateGame.run(state.game);
     persistRuntime();
+  },
+
+  // Overlay the calibrated grid on the projector — off for art with its own grid.
+  'map.set_grid_visible'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    R.assert(typeof p.visible === 'boolean', 'visible must be a boolean');
+    map.grid_visible = p.visible ? 1 : 0;
+    stmts.setMapGridVisible.run(map.grid_visible, map.id);
   },
 
   'map.delete'(p) {

@@ -35,7 +35,7 @@
   // PixiJS map renderer (created lazily; torn down when the map turns off)
   // ------------------------------------------------------------------------
   const pixi = {
-    app: null, world: null, mapSprite: null, tokenLayer: null,
+    app: null, world: null, mapSprite: null, gridLayer: null, tokenLayer: null,
     imagePath: null, glows: [],
   };
 
@@ -68,6 +68,7 @@
     pixi.app = null;
     pixi.world = null;
     pixi.mapSprite = null;
+    pixi.gridLayer = null;
     pixi.tokenLayer = null;
     pixi.imagePath = null;
     pixi.glows = [];
@@ -83,11 +84,39 @@
     if (pixi.imagePath !== map.image_path) {
       pixi.world.removeChildren();
       pixi.mapSprite = PIXI.Sprite.from(map.image_path);
-      pixi.mapSprite.width = map.image_w;
-      pixi.mapSprite.height = map.image_h;
+      // Size the sprite only once its real texture exists — sizing against the
+      // 1x1 loading placeholder bakes in a garbage scale (the "zoom does
+      // nothing" bug: the map rendered at nonsense size).
+      const fitSprite = () => {
+        pixi.mapSprite.width = map.image_w;
+        pixi.mapSprite.height = map.image_h;
+      };
+      if (pixi.mapSprite.texture.baseTexture.valid) fitSprite();
+      else pixi.mapSprite.texture.baseTexture.once('loaded', fitSprite);
+      pixi.gridLayer = new PIXI.Graphics();
       pixi.world.addChild(pixi.mapSprite);
+      pixi.world.addChild(pixi.gridLayer);
       pixi.world.addChild(pixi.tokenLayer);
       pixi.imagePath = map.image_path;
+    }
+
+    // --- calibrated grid overlay (GM-toggleable; off for pre-gridded art) ---
+    pixi.gridLayer.clear();
+    if (map.grid_visible) {
+      const dims = CampfireMap.gridDims(map);
+      const x1 = map.offset_x + dims.cols * map.cell_size;
+      const y1 = map.offset_y + dims.rows * map.cell_size;
+      pixi.gridLayer.lineStyle(Math.max(map.cell_size * 0.025, 1), 0xffffff, 0.28);
+      for (let i = 0; i <= dims.cols; i++) {
+        const x = map.offset_x + i * map.cell_size;
+        pixi.gridLayer.moveTo(x, map.offset_y);
+        pixi.gridLayer.lineTo(x, y1);
+      }
+      for (let j = 0; j <= dims.rows; j++) {
+        const y = map.offset_y + j * map.cell_size;
+        pixi.gridLayer.moveTo(map.offset_x, y);
+        pixi.gridLayer.lineTo(x1, y);
+      }
     }
 
     // --- tokens: rebuilt each snapshot (dozens at most — cheap) -------------

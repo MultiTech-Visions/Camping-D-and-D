@@ -227,6 +227,15 @@ check('tokens live in grid space with bounds; one pc token per character', () =>
   ops['token.delete']({ token_id: glow });
 });
 
+check('grid overlay toggle per map', () => {
+  assert.strictEqual(state.maps.get(mapId).grid_visible, 1); // on by default
+  ops['map.set_grid_visible']({ map_id: mapId, visible: false });
+  assert.strictEqual(state.maps.get(mapId).grid_visible, 0);
+  ops['map.set_grid_visible']({ map_id: mapId, visible: true });
+  throws(() => ops['map.set_grid_visible']({ map_id: mapId, visible: 'yes' })); // not a boolean
+  throws(() => ops['map.set_grid_visible']({ map_id: 9999, visible: true }));
+});
+
 check('camera: view-only transform with zoom rails + bookmarks', () => {
   ops['camera.update']({ center_x: 300, center_y: 200, zoom: 2, rotation_deg: 90 });
   assert.strictEqual(state.camera.zoom, 2);

@@ -366,6 +366,10 @@
       mk('⟳', () => send({ ...cam, rotation_deg: cam.rotation_deg + 15 }), 'rotate right'),
       mk('🎯', () => send({ center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 }), 'reset view'),
     );
+    ctl.appendChild(el(`<span class="muted small">zoom ${Math.round(cam.zoom * 100)}%${cam.rotation_deg ? ` · ${cam.rotation_deg}°` : ''}</span>`));
+    const gridBtn = el(`<button class="mini ${map.grid_visible ? '' : 'ghost'}" title="overlay the calibrated grid on the projector">▦ grid ${map.grid_visible ? 'on' : 'off'}</button>`);
+    gridBtn.onclick = () => conn.action('map.set_grid_visible', { map_id: map.id, visible: !map.grid_visible });
+    ctl.appendChild(gridBtn);
     box.appendChild(ctl);
 
     // bookmarks: saved views to snap to mid-session
