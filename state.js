@@ -227,6 +227,43 @@ function assertFiniteNumber(value, name) {
   return value;
 }
 
+// --- Fog of war (handoff §7) ------------------------------------------------
+// Per-cell visibility as a row-major bitmask: one char per grid cell, '1'
+// visible / '0' hidden, length cols*rows. '' means the map has no fog data.
+// Concealment is honor-system over LAN (the full map image is already served);
+// what fog adds is hiding the unexplored map AND the tokens lurking in it.
+function fogAllHidden(map) {
+  const { cols, rows } = gridDims(map);
+  return '0'.repeat(cols * rows);
+}
+function fogLen(map) {
+  const { cols, rows } = gridDims(map);
+  return cols * rows;
+}
+function fogCellVisible(map, col, row) {
+  if (!map.fog_enabled || !map.fog) return true;
+  const { cols, rows } = gridDims(map);
+  if (col < 0 || row < 0 || col >= cols || row >= rows) return false;
+  return map.fog[row * cols + col] === '1';
+}
+// A token is concealed when its WHOLE footprint sits on hidden cells; if any
+// cell it occupies is revealed, it shows.
+function tokenConcealed(map, t) {
+  if (!map.fog_enabled || !map.fog) return false;
+  for (let r = t.row; r < t.row + t.h; r++) {
+    for (let c = t.col; c < t.col + t.w; c++) {
+      if (fogCellVisible(map, c, r)) return false;
+    }
+  }
+  return true;
+}
+function assertFog(fog, map, name) {
+  R.assert(typeof fog === 'string', `${name} must be a string`);
+  R.assert(fog.length === fogLen(map), `${name} length ${fog.length} doesn't match the ${fogLen(map)}-cell grid`);
+  R.assert(/^[01]*$/.test(fog), `${name} must contain only '0' and '1'`);
+  return fog;
+}
+
 // '' = no portrait; otherwise must be a genuinely uploaded token image.
 function assertTokenArt(value, name) {
   R.assertString(value, name);
@@ -579,6 +616,10 @@ const ops = {
       offset_x: assertFiniteNumber(p.offset_x, 'offset_x'),
       offset_y: assertFiniteNumber(p.offset_y, 'offset_y'),
       grid_visible: 1,
+      base_rotation: 0,
+      fog_enabled: 0,
+      fog: '',
+      fog_darkness: config.FOG_DARKNESS_DEFAULT,
     };
     assertCalibrationSane(row);
     const info = stmts.insertMap.run(row);
@@ -595,6 +636,8 @@ const ops = {
     R.assertInt(p.map_id, 'map_id');
     const map = state.maps.get(p.map_id);
     R.assert(map, `no map with id ${p.map_id}`);
+    const oldFog = map.fog;
+    const oldDims = gridDims(map);
     const next = {
       ...map,
       cell_size: assertFiniteNumber(p.cell_size, 'cell_size'),
@@ -604,6 +647,19 @@ const ops = {
     assertCalibrationSane(next);
     Object.assign(map, next);
     stmts.updateMapCalibration.run(map.cell_size, map.offset_x, map.offset_y, map.id);
+    // Re-grid the fog: the new grid is a different size, so re-stamp visibility
+    // for the cells the two grids share and leave the rest hidden.
+    if (map.fog_enabled && oldFog) {
+      const nd = gridDims(map);
+      const arr = new Array(nd.cols * nd.rows).fill('0');
+      for (let r = 0; r < Math.min(oldDims.rows, nd.rows); r++) {
+        for (let c = 0; c < Math.min(oldDims.cols, nd.cols); c++) {
+          if (oldFog[r * oldDims.cols + c] === '1') arr[r * nd.cols + c] = '1';
+        }
+      }
+      map.fog = arr.join('');
+      stmts.setMapFog.run(map.fog, map.id);
+    }
     if (state.game.active_map_id === map.id) {
       const dims = gridDims(map);
       for (const t of state.tokens.values()) {
@@ -637,7 +693,8 @@ const ops = {
       const map = state.maps.get(p.map_id);
       R.assert(map, `no map with id ${p.map_id}`);
       state.game.active_map_id = map.id;
-      state.camera = { center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 };
+      // open at the map's primary orientation; the GM can still rotate from there
+      state.camera = { center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: map.base_rotation || 0 };
     }
     stmts.updateGame.run(state.game);
     persistRuntime();
@@ -651,6 +708,54 @@ const ops = {
     R.assert(typeof p.visible === 'boolean', 'visible must be a boolean');
     map.grid_visible = p.visible ? 1 : 0;
     stmts.setMapGridVisible.run(map.grid_visible, map.id);
+  },
+
+  // The map's primary orientation (0/90/180/270). Persisted with the map and
+  // used to seed the camera when it opens; applied live if it's already showing.
+  'map.set_base_rotation'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    map.base_rotation = R.assertOneOf(p.rotation_deg, config.MAP_ROTATIONS, 'rotation_deg');
+    stmts.setMapBaseRotation.run(map.base_rotation, map.id);
+    if (state.game.active_map_id === map.id && state.camera) {
+      state.camera.rotation_deg = map.base_rotation;
+      persistRuntime();
+    }
+  },
+
+  // Turn fog of war on/off for a map. Switching it on for a map that has no fog
+  // data yet hides the whole board — the GM then reveals the opening area.
+  'map.set_fog_enabled'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    R.assert(typeof p.enabled === 'boolean', 'enabled must be a boolean');
+    map.fog_enabled = p.enabled ? 1 : 0;
+    if (map.fog_enabled && map.fog.length !== fogLen(map)) map.fog = fogAllHidden(map);
+    stmts.setMapFogEnabled.run(map.fog_enabled, map.fog, map.id);
+  },
+
+  // Replace the whole visibility bitmask (the fog editor commits the result of a
+  // paint/lasso stroke, or a reveal-all / hide-all, this way).
+  'map.set_fog'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    map.fog = assertFog(p.fog, map, 'fog');
+    stmts.setMapFog.run(map.fog, map.id);
+  },
+
+  // Dial the projector fog from light gray (0) to pitch black (1) — dark room vs
+  // actual fog.
+  'map.set_fog_darkness'(p) {
+    R.assertInt(p.map_id, 'map_id');
+    const map = state.maps.get(p.map_id);
+    R.assert(map, `no map with id ${p.map_id}`);
+    const d = assertFiniteNumber(p.darkness, 'darkness');
+    R.assert(d >= 0 && d <= 1, 'darkness must be within [0, 1]');
+    map.fog_darkness = d;
+    stmts.setMapFogDarkness.run(d, map.id);
   },
 
   'map.delete'(p) {
@@ -860,6 +965,12 @@ function snapshotFor(role, charId) {
   const chars = [...state.characters.values()];
   const clocks = [...state.clocks.values()];
   const activeMapRow = state.game.active_map_id === null ? null : { ...state.maps.get(state.game.active_map_id) };
+  // Tokens lurking entirely in the fog are dropped for players and the projector
+  // (decision: hide ALL tokens in fog, PCs included). The GM keeps the full set.
+  const allTokens = [...state.tokens.values()];
+  const roleTokens = (role === 'dm' || activeMapRow === null || !activeMapRow.fog_enabled)
+    ? allTokens
+    : allTokens.filter((t) => !tokenConcealed(activeMapRow, t));
   const base = {
     game: { reward_every_n_encounters: state.game.reward_every_n_encounters, active_map_id: state.game.active_map_id },
     initiative: {
@@ -877,7 +988,7 @@ function snapshotFor(role, charId) {
       turn_id: state.initiative.turn_id,
     },
     map: activeMapRow,
-    tokens: [...state.tokens.values()].map((t) => ({ ...t })),
+    tokens: roleTokens.map((t) => ({ ...t })),
     camera: state.camera === null ? null : { ...state.camera },
     display_viewport: state.display_viewport === null ? null : { ...state.display_viewport },
     config: {
@@ -891,6 +1002,7 @@ function snapshotFor(role, charId) {
       TOKEN_DEFAULT_COLORS: config.TOKEN_DEFAULT_COLORS,
       TOKEN_SHAPES: config.TOKEN_SHAPES,
       TOKEN_DEFAULT_SHAPES: config.TOKEN_DEFAULT_SHAPES,
+      MAP_ROTATIONS: config.MAP_ROTATIONS,
       DND: config.DND,
     },
   };

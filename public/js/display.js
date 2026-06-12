@@ -37,7 +37,16 @@
   const pixi = {
     app: null, world: null, mapSprite: null, gridLayer: null, tokenLayer: null,
     imagePath: null, glows: [],
+    // fog of war: a cloud layer clipped to the hidden cells (see renderMap)
+    fogLayer: null, fogMask: null, fogFill: null, cloudA: null, cloudB: null, fogKey: null,
   };
+
+  // PIXI texture wrapping the shared tileable cloud canvas (built once).
+  let cloudTex = null;
+  function ensureCloudTexture() {
+    if (!cloudTex) cloudTex = PIXI.Texture.from(CampfireMap.cloudCanvas());
+    return cloudTex;
+  }
 
   function ensurePixi() {
     if (pixi.app) return;
@@ -51,13 +60,18 @@
     pixi.app.stage.addChild(pixi.world);
     pixi.tokenLayer = new PIXI.Container();
 
-    // glow pulse animation — cheap sine on alpha/scale, display client only
+    // glow pulse + fog drift animation — cheap, display client only
     pixi.app.ticker.add(() => {
       const t = performance.now() / 1000;
       for (const g of pixi.glows) {
         const wave = g.pulse === 0 ? 1 : 0.75 + 0.25 * Math.sin(2 * Math.PI * g.pulse * t);
         g.sprite.alpha = 0.55 * wave;
         g.sprite.scale.set(wave);
+      }
+      // two cloud layers crawl in different directions → slow billowing fog
+      if (pixi.fogLayer && pixi.fogLayer.visible) {
+        pixi.cloudA.tilePosition.set(t * 6, t * 2.5);
+        pixi.cloudB.tilePosition.set(-t * 3.5, t * 4);
       }
     });
   }
@@ -70,6 +84,8 @@
     pixi.mapSprite = null;
     pixi.gridLayer = null;
     pixi.tokenLayer = null;
+    pixi.fogLayer = pixi.fogMask = pixi.fogFill = pixi.cloudA = pixi.cloudB = null;
+    pixi.fogKey = null;
     pixi.imagePath = null;
     pixi.glows = [];
     mapRoot.innerHTML = '';
@@ -77,6 +93,40 @@
 
   function hexToNum(color) {
     return Number(`0x${color.replace('#', '')}`);
+  }
+
+  // Rebuild the fog clip-mask from the visibility bitmask: the mask is the union
+  // of hidden cells (horizontal runs merged so it stays a handful of rects), and
+  // the cloud fill spans the whole image — the mask is what reveals it only over
+  // the fog. Cheap and only re-run when the bitmask or calibration changes.
+  function rebuildFog(map) {
+    pixi.fogMask.clear();
+    pixi.fogFill.clear();
+    const on = !!map.fog_enabled && !!map.fog;
+    pixi.fogLayer.visible = on;
+    if (!on) return;
+    const { cols, rows } = CampfireMap.gridDims(map);
+    pixi.fogMask.beginFill(0xffffff);
+    for (let r = 0; r < rows; r++) {
+      let run = -1;
+      for (let c = 0; c <= cols; c++) {
+        const hidden = c < cols && map.fog[r * cols + c] === '0';
+        if (hidden && run < 0) run = c;
+        else if (!hidden && run >= 0) {
+          pixi.fogMask.drawRect(
+            map.offset_x + run * map.cell_size, map.offset_y + r * map.cell_size,
+            (c - run) * map.cell_size, map.cell_size,
+          );
+          run = -1;
+        }
+      }
+    }
+    pixi.fogMask.endFill();
+    pixi.fogFill.beginFill(0xffffff).drawRect(0, 0, map.image_w, map.image_h).endFill();
+    pixi.cloudA.width = pixi.cloudB.width = map.image_w;
+    pixi.cloudA.height = pixi.cloudB.height = map.image_h;
+    pixi.cloudA.tileScale.set((map.cell_size * 4) / 256);
+    pixi.cloudB.tileScale.set((map.cell_size * 7) / 256);
   }
 
   function renderMap(snap) {
@@ -96,8 +146,20 @@
       if (pixi.mapSprite.texture.baseTexture.valid) fitSprite();
       else pixi.mapSprite.texture.baseTexture.once('loaded', fitSprite);
       pixi.gridLayer = new PIXI.Graphics();
+      // fog layer: an opaque cloud fill clipped to the hidden cells, drawn over
+      // the map + grid but UNDER the tokens (revealed tokens always stay crisp).
+      pixi.fogLayer = new PIXI.Container();
+      pixi.fogMask = new PIXI.Graphics();
+      pixi.fogFill = new PIXI.Graphics();
+      const tex = ensureCloudTexture();
+      pixi.cloudA = new PIXI.TilingSprite(tex, map.image_w, map.image_h);
+      pixi.cloudB = new PIXI.TilingSprite(tex, map.image_w, map.image_h);
+      pixi.fogLayer.addChild(pixi.fogFill, pixi.cloudA, pixi.cloudB, pixi.fogMask);
+      pixi.fogLayer.mask = pixi.fogMask;
+      pixi.fogKey = null;
       pixi.world.addChild(pixi.mapSprite);
       pixi.world.addChild(pixi.gridLayer);
+      pixi.world.addChild(pixi.fogLayer);
       pixi.world.addChild(pixi.tokenLayer);
       pixi.imagePath = map.image_path;
     }
@@ -119,6 +181,24 @@
         pixi.gridLayer.moveTo(map.offset_x, y);
         pixi.gridLayer.lineTo(x1, y);
       }
+    }
+
+    // --- fog of war: cloud layer clipped to the hidden cells ----------------
+    // Re-stamp the mask only when the bitmask/calibration changed; the darkness
+    // dial is cheap (tint + alpha) so it rides every snapshot. The clouds drift
+    // forever via the ticker; darkness fades them out toward pitch black so a
+    // "dark room" reads as flat black while light gray stays billowy.
+    const fogKey = `${map.fog_enabled}|${map.fog}|${map.cell_size}|${map.offset_x}|${map.offset_y}|${map.image_w}|${map.image_h}`;
+    if (pixi.fogKey !== fogKey) { rebuildFog(map); pixi.fogKey = fogKey; }
+    if (pixi.fogLayer.visible) {
+      const d = Math.min(Math.max(map.fog_darkness == null ? 0.85 : map.fog_darkness, 0), 1);
+      pixi.fogFill.tint = CampfireMap.lerpHex(0x9aa1ad, 0x050608, d); // light gray → near black
+      pixi.fogFill.alpha = 0.5 + 0.5 * d;                 // translucent fog → opaque dark
+      const cloudVis = 1 - d;
+      pixi.cloudA.tint = 0xd6dae3;
+      pixi.cloudB.tint = 0xb8bdc8;
+      pixi.cloudA.alpha = 0.45 * cloudVis;
+      pixi.cloudB.alpha = 0.3 * cloudVis;
     }
 
     // --- tokens: rebuilt each snapshot (dozens at most — cheap) -------------

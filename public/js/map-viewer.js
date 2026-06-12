@@ -16,15 +16,19 @@ window.CampfireMapViewer = (function () {
     return d.innerHTML;
   }
 
-  // open({ bottomEl?, onClose?, onZoomChange? })
+  // open({ bottomEl?, onClose?, onZoomChange?, fog? })
   //   -> { update(snap, {highlight?}), close(), setTapMode(fn), setZoom(s), getZoom() }
-  function open({ bottomEl, onClose, onZoomChange } = {}) {
+  // fog defaults on (players scout through fog of war); the GM's token mover
+  // passes fog:false so the omniscient GM sees the whole board while placing.
+  function open({ bottomEl, onClose, onZoomChange, fog = true } = {}) {
     const overlay = el(`<div style="position:fixed;inset:0;background:#0c0906;z-index:60;display:flex;flex-direction:column"></div>`);
     const viewport = el(`<div style="flex:1;position:relative;overflow:hidden;touch-action:none"></div>`);
     const holder = el(`<div style="position:absolute;left:0;top:0;transform-origin:0 0"></div>`);
     const img = el(`<img draggable="false" style="display:block;width:100%;user-select:none">`);
+    // fog canvas rides the holder transform, so the fog pans/zooms with the map
+    const fogCanvas = el(`<canvas style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>`);
     const tokenLayer = el(`<div></div>`);
-    holder.append(img, tokenLayer);
+    holder.append(img, fogCanvas, tokenLayer);
     viewport.appendChild(holder);
     const closeBtn = el(`<button style="position:absolute;top:10px;right:10px;z-index:2">✕ close</button>`);
     viewport.appendChild(closeBtn);
@@ -36,7 +40,8 @@ window.CampfireMapViewer = (function () {
     }
     document.body.appendChild(overlay);
 
-    const v = { scale: 1, tx: 0, ty: 0, imagePath: null, focused: false };
+    const v = { scale: 1, tx: 0, ty: 0, imagePath: null, focused: false, map: null };
+    let fogRaf = null;
     const apply = () => {
       holder.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
       if (onZoomChange) onZoomChange(v.scale);
@@ -120,12 +125,17 @@ window.CampfireMapViewer = (function () {
       if (v.imagePath !== map.image_path) {
         v.imagePath = map.image_path;
         img.src = map.image_path;
-        holder.style.width = `${viewport.clientWidth}px`;
+        const baseW = viewport.clientWidth;
+        holder.style.width = `${baseW}px`;
+        // match the fog canvas resolution to the on-screen map at scale 1
+        fogCanvas.width = Math.max(1, Math.round(baseW));
+        fogCanvas.height = Math.max(1, Math.round(baseW * (map.image_h / map.image_w)));
         v.scale = 1;
         v.tx = 0;
         v.ty = (viewport.clientHeight - viewport.clientWidth * (map.image_h / map.image_w)) / 2;
         apply();
       }
+      v.map = map; // hand the latest fog/calibration to the drift loop
       tokenLayer.innerHTML = '';
       for (const t of snap.tokens) {
         const color = t.kind === 'glow' ? t.glow_color : t.color;
@@ -158,10 +168,63 @@ window.CampfireMapViewer = (function () {
       }
     }
 
+    // Billowing fog over the hidden cells: a darkness-dialed floor (light gray →
+    // near black) with two drifting cloud layers that fade out toward pitch
+    // black. Tokens in fog are dropped server-side, so this only ever covers
+    // unexplored ground. Matches the projector's PIXI fog.
+    function drawFog() {
+      const ctx = fogCanvas.getContext('2d');
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+      const map = v.map;
+      if (fog && map && map.fog_enabled && map.fog && fogCanvas.width > 0) {
+        const sc = fogCanvas.width / map.image_w;
+        const { cols, rows } = CampfireMap.gridDims(map);
+        ctx.save();
+        ctx.beginPath();
+        for (let r = 0; r < rows; r++) {
+          let run = -1;
+          for (let c = 0; c <= cols; c++) {
+            const hidden = c < cols && map.fog[r * cols + c] === '0';
+            if (hidden && run < 0) run = c;
+            else if (!hidden && run >= 0) {
+              ctx.rect((map.offset_x + run * map.cell_size) * sc, (map.offset_y + r * map.cell_size) * sc,
+                (c - run) * map.cell_size * sc, map.cell_size * sc);
+              run = -1;
+            }
+          }
+        }
+        ctx.clip();
+        const d = Math.min(Math.max(map.fog_darkness == null ? 0.85 : map.fog_darkness, 0), 1);
+        const floor = CampfireMap.lerpHex(0x9aa1ad, 0x050608, d);
+        ctx.globalAlpha = 0.5 + 0.5 * d;
+        ctx.fillStyle = `#${floor.toString(16).padStart(6, '0')}`;
+        ctx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+        const cloudVis = 1 - d;
+        if (cloudVis > 0.01) {
+          const t = performance.now() / 1000;
+          const pat = ctx.createPattern(CampfireMap.cloudCanvas(), 'repeat');
+          if (pat && pat.setTransform && typeof DOMMatrix === 'function') {
+            pat.setTransform(new DOMMatrix().translateSelf(t * 6 * sc, t * 3 * sc).scaleSelf((map.cell_size * 5 * sc) / 256));
+          }
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.6 * cloudVis;
+          ctx.fillStyle = pat;
+          ctx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+          ctx.globalCompositeOperation = 'source-over';
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+      fogRaf = requestAnimationFrame(drawFog);
+    }
+    drawFog();
+
     let closed = false;
     function close() {
       if (closed) return;
       closed = true;
+      if (fogRaf) cancelAnimationFrame(fogRaf);
       overlay.remove();
       if (onClose) onClose();
     }

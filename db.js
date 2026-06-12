@@ -75,7 +75,17 @@ CREATE TABLE IF NOT EXISTS map_calibration (
   cell_size    REAL    NOT NULL,
   offset_x     REAL    NOT NULL,
   offset_y     REAL    NOT NULL,
-  grid_visible INTEGER NOT NULL DEFAULT 1   -- overlay the calibrated grid (off for pre-gridded art)
+  grid_visible INTEGER NOT NULL DEFAULT 1,  -- overlay the calibrated grid (off for pre-gridded art)
+  -- Fog of war + orientation (see handoff §7). base_rotation is the map's
+  -- primary orientation in degrees (0/90/180/270): it seeds the camera when the
+  -- map opens. fog is a per-cell visibility bitmask, one char per grid cell in
+  -- row-major order ('1' visible, '0' hidden), length cols*rows; '' means no fog
+  -- data yet. fog_darkness 0..1 dials the projector fog from light gray (0) to
+  -- pitch black (1).
+  base_rotation REAL    NOT NULL DEFAULT 0,
+  fog_enabled   INTEGER NOT NULL DEFAULT 0,
+  fog           TEXT    NOT NULL DEFAULT '',
+  fog_darkness  REAL    NOT NULL DEFAULT 0.85
 );
 
 -- Phase 3: tokens live in GRID coordinates (col,row) — never pixels/screen.
@@ -131,6 +141,12 @@ if (!mapCols.some((c) => c.name === 'grid_visible')) {
 if (!mapCols.some((c) => c.name === 'name')) {
   db.exec(`ALTER TABLE map_calibration ADD COLUMN name TEXT NOT NULL DEFAULT ''`);
   db.exec(`UPDATE map_calibration SET name = 'Map ' || id WHERE name = ''`);
+}
+if (!mapCols.some((c) => c.name === 'fog')) {
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN base_rotation REAL NOT NULL DEFAULT 0`);
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN fog_enabled INTEGER NOT NULL DEFAULT 0`);
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN fog TEXT NOT NULL DEFAULT ''`);
+  db.exec(`ALTER TABLE map_calibration ADD COLUMN fog_darkness REAL NOT NULL DEFAULT 0.85`);
 }
 if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'w')) {
   db.exec(`ALTER TABLE token ADD COLUMN w INTEGER NOT NULL DEFAULT 1`);
@@ -195,9 +211,15 @@ const stmts = {
   updateGame: db.prepare(`UPDATE game SET reward_every_n_encounters=@reward_every_n_encounters, active_map_id=@active_map_id WHERE id=1`),
 
   insertMap: db.prepare(`
-    INSERT INTO map_calibration (name, image_path, image_w, image_h, cell_size, offset_x, offset_y, grid_visible)
-    VALUES (@name, @image_path, @image_w, @image_h, @cell_size, @offset_x, @offset_y, @grid_visible)`),
+    INSERT INTO map_calibration (name, image_path, image_w, image_h, cell_size, offset_x, offset_y,
+      grid_visible, base_rotation, fog_enabled, fog, fog_darkness)
+    VALUES (@name, @image_path, @image_w, @image_h, @cell_size, @offset_x, @offset_y,
+      @grid_visible, @base_rotation, @fog_enabled, @fog, @fog_darkness)`),
   setMapGridVisible: db.prepare(`UPDATE map_calibration SET grid_visible=? WHERE id=?`),
+  setMapBaseRotation: db.prepare(`UPDATE map_calibration SET base_rotation=? WHERE id=?`),
+  setMapFogEnabled: db.prepare(`UPDATE map_calibration SET fog_enabled=?, fog=? WHERE id=?`),
+  setMapFog: db.prepare(`UPDATE map_calibration SET fog=? WHERE id=?`),
+  setMapFogDarkness: db.prepare(`UPDATE map_calibration SET fog_darkness=? WHERE id=?`),
   renameMap: db.prepare(`UPDATE map_calibration SET name=? WHERE id=?`),
   updateMapCalibration: db.prepare(`UPDATE map_calibration SET cell_size=?, offset_x=?, offset_y=? WHERE id=?`),
   deleteMap: db.prepare(`DELETE FROM map_calibration WHERE id=?`),

@@ -333,6 +333,63 @@ check('grid overlay toggle per map', () => {
   throws(() => ops['map.set_grid_visible']({ map_id: 9999, visible: true }));
 });
 
+check('fog of war: enable hides the board, bitmask + darkness + token concealment', () => {
+  const map = state.maps.get(mapId);
+  const cols = Math.floor((map.image_w - map.offset_x) / map.cell_size); // 19
+  const rows = Math.floor((map.image_h - map.offset_y) / map.cell_size); // 15
+  assert.strictEqual(map.fog_enabled, 0); // off by default — current behaviour preserved
+
+  // enabling for the first time hides the whole board
+  ops['map.set_fog_enabled']({ map_id: mapId, enabled: true });
+  assert.strictEqual(state.maps.get(mapId).fog_enabled, 1);
+  assert.strictEqual(state.maps.get(mapId).fog, '0'.repeat(cols * rows));
+  throws(() => ops['map.set_fog_enabled']({ map_id: mapId, enabled: 'yes' }));
+
+  // a fully-fogged token vanishes for players + display but never for the GM
+  const lurker = ops['token.create']({ label: 'Lurker', kind: 'monster', col: 1, row: 1 }).created_token_id;
+  const seen = (role) => snapshotFor(role, null).tokens.some((t) => t.id === lurker);
+  assert.ok(seen('dm') && !seen('player') && !seen('display'));
+
+  // reveal the lurker's cell → it reappears everywhere
+  const reveal = '0'.repeat(cols * rows).split('');
+  reveal[1 * cols + 1] = '1';
+  ops['map.set_fog']({ map_id: mapId, fog: reveal.join('') });
+  assert.ok(seen('dm') && seen('player') && seen('display'));
+  ops['token.delete']({ token_id: lurker });
+
+  // bitmask must match the grid exactly and be binary
+  throws(() => ops['map.set_fog']({ map_id: mapId, fog: '01' }));               // wrong length
+  throws(() => ops['map.set_fog']({ map_id: mapId, fog: '2'.repeat(cols * rows) })); // non-binary
+
+  // darkness dial 0..1
+  ops['map.set_fog_darkness']({ map_id: mapId, darkness: 0.4 });
+  assert.strictEqual(state.maps.get(mapId).fog_darkness, 0.4);
+  throws(() => ops['map.set_fog_darkness']({ map_id: mapId, darkness: 1.5 }));
+
+  // re-calibration re-grids the fog instead of corrupting it (length follows dims)
+  ops['map.update_calibration']({ map_id: mapId, cell_size: 100, offset_x: 50, offset_y: 50 });
+  const nd = state.maps.get(mapId);
+  const ncols = Math.floor((nd.image_w - nd.offset_x) / nd.cell_size);
+  const nrows = Math.floor((nd.image_h - nd.offset_y) / nd.cell_size);
+  assert.strictEqual(nd.fog.length, ncols * nrows);
+  ops['map.update_calibration']({ map_id: mapId, cell_size: 50, offset_x: 10, offset_y: 20 });
+
+  // turn fog back off for the remaining checks
+  ops['map.set_fog_enabled']({ map_id: mapId, enabled: false });
+  assert.strictEqual(state.maps.get(mapId).fog_enabled, 0);
+});
+
+check('map primary orientation seeds the camera + applies live', () => {
+  ops['map.set_base_rotation']({ map_id: mapId, rotation_deg: 90 });
+  assert.strictEqual(state.maps.get(mapId).base_rotation, 90);
+  assert.strictEqual(state.camera.rotation_deg, 90); // active map → live
+  throws(() => ops['map.set_base_rotation']({ map_id: mapId, rotation_deg: 45 })); // not a quarter turn
+  // re-opening the map starts at its primary orientation
+  ops['map.set_active']({ map_id: mapId });
+  assert.strictEqual(state.camera.rotation_deg, 90);
+  ops['map.set_base_rotation']({ map_id: mapId, rotation_deg: 0 });
+});
+
 check('camera: view-only transform with zoom rails + bookmarks', () => {
   ops['camera.update']({ center_x: 300, center_y: 200, zoom: 2, rotation_deg: 90 });
   assert.strictEqual(state.camera.zoom, 2);
