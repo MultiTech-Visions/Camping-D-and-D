@@ -125,6 +125,7 @@
     pixi.tokenLayer.removeChildren();
     pixi.glows = [];
     const turnEntry = snap.initiative.entries.find((e) => e.id === snap.initiative.turn_id);
+    const camTheta = (snap.camera.rotation_deg * Math.PI) / 180;
 
     for (const tok of snap.tokens) {
       // footprint: (col,row) is the top-left cell; w×h cells; render from its center
@@ -182,8 +183,19 @@
         align: 'center',
       });
       label.anchor.set(0.5, 0);
-      label.position.set(0, (tok.shape === 'square' ? fh / 2 : fh * 0.4) + map.cell_size * 0.05);
-      holder.addChild(label);
+      // Labels stay readable whatever the camera rotation: a wrapper counter-
+      // rotates against the world so the text is always upright and hangs
+      // below the token IN SCREEN TERMS. The hang distance is the footprint's
+      // extent along the screen-down axis at this rotation, so the text
+      // clears the shape's edge instead of overlapping it.
+      const ext = tok.shape === 'square'
+        ? (fw / 2) * Math.abs(Math.sin(camTheta)) + (fh / 2) * Math.abs(Math.cos(camTheta))
+        : Math.sqrt((fw * 0.4 * Math.sin(camTheta)) ** 2 + (fh * 0.4 * Math.cos(camTheta)) ** 2);
+      const labelWrap = new PIXI.Container();
+      labelWrap.rotation = -camTheta;
+      label.position.set(0, ext + map.cell_size * 0.05);
+      labelWrap.addChild(label);
+      holder.addChild(labelWrap);
 
       if (dead) holder.alpha = 0.55;
       pixi.tokenLayer.addChild(holder);
