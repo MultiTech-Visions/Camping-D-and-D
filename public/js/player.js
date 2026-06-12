@@ -269,6 +269,7 @@
         spell_slots: Array.from({ length: cfg.SPELL_LEVELS }, () => ({ max: 0, used: 0 })),
         skills: Object.fromEntries(cfg.SKILLS.map((sk) => [sk.key, { prof: builderSkills[sk.key], misc: 0 }])),
         custom_skills: [],
+        spells: [],
       };
       conn.action('character.create', {
         system: 'dnd5e',
@@ -312,9 +313,15 @@
     }
     box.appendChild(el(`<p class="muted small center">You're at (${mine.col}, ${mine.row})</p>`));
     const pad = el(`<div style="display:grid;grid-template-columns:repeat(3,64px);gap:6px;justify-content:center"></div>`);
-    const mv = (dc, dr, txt) => {
+    // arrows match what's on the wall: ▲ = up on the projector, even with the
+    // map rotated
+    const mv = (sx, sy, txt) => {
       const b = el(`<button style="font-size:1.3rem">${txt}</button>`);
-      b.onclick = () => conn.action('token.move', { token_id: mine.id, col: mine.col + dc, row: mine.row + dr });
+      b.onclick = () => {
+        const rot = snap.camera === null ? 0 : snap.camera.rotation_deg;
+        const step = CampfireMap.screenStepToGrid(rot, sx, sy);
+        conn.action('token.move', { token_id: mine.id, col: mine.col + step.dc, row: mine.row + step.dr });
+      };
       return b;
     };
     pad.append(el(`<span></span>`), mv(0, -1, '▲'), el(`<span></span>`),
@@ -582,6 +589,76 @@
     skillCard.appendChild(addRow);
     skillCard.appendChild(el(`<p class="muted small">* includes a misc bonus — set those in ✏ Edit stats.</p>`));
     root.appendChild(skillCard);
+
+    // Spellbook: name + level is all a spell needs; the optional note line is
+    // the player's own cheat sheet; cast consumes a matching slot
+    const spellBook = el(`<div class="card"><h3>📜 Spellbook</h3></div>`);
+    if (s.spells.length > 0) {
+      const sorted = s.spells.map((sp, idx) => ({ sp, idx }))
+        .sort((a, b) => a.sp.level - b.sp.level || a.sp.name.localeCompare(b.sp.name));
+      let lastLevel = -1;
+      for (const { sp, idx } of sorted) {
+        if (sp.level !== lastLevel) {
+          lastLevel = sp.level;
+          spellBook.appendChild(el(`<div class="muted small" style="margin-top:8px;text-transform:uppercase;letter-spacing:.08em">${sp.level === 0 ? 'Cantrips' : `Level ${sp.level}`}</div>`));
+        }
+        const row = el(`<div class="attr-row" style="padding:6px 0;${sp.level > 0 && !sp.prepared ? 'opacity:.45' : ''}"></div>`);
+        const main = el(`<span class="attr-name" style="width:auto;flex:1"></span>`);
+        if (sp.level > 0) {
+          const prep = el(`<button class="mini ghost" title="${sp.prepared ? 'prepared — tap to unprepare' : 'not prepared — tap to prepare'}" style="min-width:36px">${sp.prepared ? '●' : '○'}</button>`);
+          prep.onclick = () => sendSheet((n) => { n.spells[idx].prepared = !n.spells[idx].prepared; });
+          main.appendChild(prep);
+        } else {
+          main.appendChild(el(`<span class="muted" style="display:inline-block;min-width:36px;text-align:center">◆</span>`));
+        }
+        main.appendChild(el(`<span> ${esc(sp.name)}${sp.concentration ? ' <span title="concentration" style="color:var(--gold)">Ⓒ</span>' : ''}</span>`));
+        if (sp.note) main.appendChild(el(`<div class="muted small" style="margin-left:42px">${esc(sp.note)}</div>`));
+        row.appendChild(main);
+        if (sp.level > 0) {
+          const slot = s.spell_slots[sp.level - 1];
+          const cast = el(`<button class="mini">⚡ cast</button>`);
+          cast.disabled = !sp.prepared || slot.used >= slot.max;
+          cast.title = slot.max === 0
+            ? `no level ${sp.level} slots — set them in ✏ Edit stats`
+            : `${slot.max - slot.used} of ${slot.max} level-${sp.level} slots left (to upcast, tap a higher slot pip below)`;
+          cast.onclick = () => {
+            sendSheet((n) => { n.spell_slots[sp.level - 1].used += 1; });
+            conn.toast(`${sp.name} cast — level ${sp.level} slot used ⚡`, true);
+          };
+          row.appendChild(cast);
+        } else {
+          row.appendChild(el(`<span class="muted small">at will</span>`));
+        }
+        const del = el(`<button class="mini danger ghost">✕</button>`);
+        del.onclick = () => sendSheet((n) => { n.spells.splice(idx, 1); });
+        row.appendChild(del);
+        spellBook.appendChild(row);
+      }
+    }
+    const spAdd = el(`<div class="btn-row" style="margin-top:10px"></div>`);
+    const spName = el(`<input type="text" placeholder="Fireball" style="max-width:150px" maxlength="60">`);
+    const spLevel = el(`<select style="max-width:110px"><option value="0">cantrip</option>${Array.from({ length: 9 }, (_, i) => `<option value="${i + 1}">level ${i + 1}</option>`).join('')}</select>`);
+    const spConc = el(`<label style="display:inline-flex;align-items:center;gap:4px;margin:0"><input type="checkbox" style="width:auto"> Ⓒ</label>`);
+    const spNote = el(`<input type="text" placeholder="cheat note: 8d6 fire, 150ft, DEX half (optional)" maxlength="200" style="max-width:280px">`);
+    const spBtn = el(`<button class="mini">+ add</button>`);
+    spBtn.onclick = () => {
+      if (!spName.value.trim()) return;
+      const spell = {
+        name: spName.value.trim(),
+        level: Number(spLevel.value),
+        prepared: true,
+        concentration: spConc.querySelector('input').checked,
+        note: spNote.value.trim(),
+      };
+      sendSheet((n) => { n.spells.push(spell); });
+      spName.value = '';
+      spNote.value = '';
+      spConc.querySelector('input').checked = false;
+    };
+    spAdd.append(spName, spLevel, spConc, spNote, spBtn);
+    spellBook.appendChild(spAdd);
+    if (s.spells.length === 0) spellBook.appendChild(el(`<p class="muted small">Just a name and a level is enough — the note is your optional one-line cheat sheet.</p>`));
+    root.appendChild(spellBook);
 
     // Spell slots
     const hasSlots = s.spell_slots.some((x) => x.max > 0);

@@ -69,6 +69,10 @@ function load() {
         sheet.custom_skills = [];
         migrated = true;
       }
+      if (sheet.spells === undefined) {
+        sheet.spells = [];
+        migrated = true;
+      }
       R.validateDndSheet(sheet);
       if (migrated) migratedSheets.push(row.id);
     }
@@ -269,10 +273,11 @@ const ops = {
   },
 
   // D&D 5e sheet edit: client sends the full new sheet; server validates whole-sheet.
+  // Deep-copy before storing: canonical state must never alias a caller's object.
   'character.update_dnd'(p) {
     const c = getChar(p.char_id);
     R.assert(c.system === 'dnd5e', `character ${c.id} is not a D&D 5e character`);
-    c.dnd_sheet = R.validateDndSheet(p.sheet);
+    c.dnd_sheet = R.validateDndSheet(JSON.parse(JSON.stringify(p.sheet)));
     persistCharacter(c);
   },
 

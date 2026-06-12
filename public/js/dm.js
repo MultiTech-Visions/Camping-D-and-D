@@ -772,11 +772,14 @@
       };
       if (selected) {
         const pad = el(`<span class="btn-row" style="margin:0"></span>`);
-        const mv = (dc, dr, txt) => {
+        // arrows are screen-relative: ▲ moves the token up on the projector,
+        // whatever the camera rotation
+        const mv = (sx, sy, txt) => {
           const b = el(`<button class="mini">${txt}</button>`);
           b.onclick = (ev) => {
             ev.stopPropagation();
-            conn.action('token.move', { token_id: t.id, col: t.col + dc, row: t.row + dr });
+            const step = CampfireMap.screenStepToGrid(snap.camera.rotation_deg, sx, sy);
+            conn.action('token.move', { token_id: t.id, col: t.col + step.dc, row: t.row + step.dr });
           };
           return b;
         };

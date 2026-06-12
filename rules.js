@@ -120,6 +120,18 @@ function validateDndSheet(sheet) {
     assertNonEmptyString(cs.name, 'custom skill name');
     assertIntIn(cs.bonus, d.SKILL_MISC_MIN, d.SKILL_MISC_MAX, `custom skill '${cs.name}' bonus`);
   }
+  // spellbook: name + level are the substance; note is an optional one-line
+  // cheat sheet (blessed empty default); prepared/concentration are table state
+  assert(Array.isArray(sheet.spells), 'spells must be an array');
+  for (const sp of sheet.spells) {
+    assert(sp !== null && typeof sp === 'object', 'each spell must be an object');
+    assertNonEmptyString(sp.name, 'spell name');
+    assertIntIn(sp.level, 0, d.SPELL_LEVELS, 'spell level (0 = cantrip)');
+    assert(typeof sp.prepared === 'boolean', `spell '${sp.name}' prepared must be a boolean`);
+    assert(typeof sp.concentration === 'boolean', `spell '${sp.name}' concentration must be a boolean`);
+    assertString(sp.note, `spell '${sp.name}' note`);
+    assert(sp.note.length <= 200, `spell '${sp.name}' note is too long (keep the cheat sheet short)`);
+  }
   return sheet;
 }
 

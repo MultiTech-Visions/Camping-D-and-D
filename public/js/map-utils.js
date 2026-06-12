@@ -39,5 +39,17 @@ window.CampfireMap = (function () {
     };
   }
 
-  return { gridDims, cellCenter, imageToGrid, clampToGrid };
+  // Translate an arrow press (screen direction sx,sy) into a one-cell grid
+  // step, honoring the camera rotation: ▲ always moves the token UP AS SEEN
+  // ON THE PROJECTOR. The rotated vector snaps to the dominant grid axis.
+  function screenStepToGrid(rotationDeg, sx, sy) {
+    const th = (rotationDeg * Math.PI) / 180;
+    const vx = sx * Math.cos(th) + sy * Math.sin(th);
+    const vy = -sx * Math.sin(th) + sy * Math.cos(th);
+    return Math.abs(vx) >= Math.abs(vy)
+      ? { dc: Math.sign(vx), dr: 0 }
+      : { dc: 0, dr: Math.sign(vy) };
+  }
+
+  return { gridDims, cellCenter, imageToGrid, clampToGrid, screenStepToGrid };
 })();
