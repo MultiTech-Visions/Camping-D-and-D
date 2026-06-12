@@ -16,6 +16,13 @@
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.dataset.live !== '1') return queueRender(s);
       render();
     },
+    onResult(msg) {
+      // a fresh token starts selected: the very next minimap tap places it
+      if (msg.op === 'token.create' && msg.created_token_id) {
+        mapUI.selectedToken = msg.created_token_id;
+        render();
+      }
+    },
   });
 
   let pendingSnap = null;
@@ -202,7 +209,6 @@
     cellsDown: 5,
     selectedToken: null,
     draggingViewport: false, // suppress re-renders while dragging the minimap box
-    pendingSpawn: null,      // {col,row} from a minimap long-press, awaiting the form
     recoloring: null,        // token id whose color picker is open
     resizing: null,          // token id whose size editor is open
     newLabel: '',            // create-form state that must survive re-renders
@@ -498,12 +504,11 @@
     //   tap (token selected)  → teleport that token to the tapped cell
     //   tap (nothing selected) → jump the camera there
     //   drag the box / drag anywhere → pan the camera, projector follows live
-    //   LONG-PRESS an empty spot → spawn-a-token form at that cell
     mini.style.touchAction = 'none';
     let grabDX = 0, grabDY = 0, lastLiveSend = 0;
     let dragX = cam.center_x, dragY = cam.center_y;
     let gestureMode = null; // 'camera' | 'tap'
-    let longTimer = null, longFired = false, downClient = null;
+    let downClient = null;
     const toImage = (ev) => {
       const r = miniImg.getBoundingClientRect();
       return {
@@ -528,7 +533,6 @@
       ev.preventDefault();
       const p = toImage(ev);
       downClient = { x: ev.clientX, y: ev.clientY };
-      longFired = false;
       const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
       const halfH = vp ? vp.height / cam.zoom / 2 : map.image_h * 0.04;
       if (!tokenPlacementMode()
@@ -541,22 +545,12 @@
         gestureMode = 'tap';
         grabDX = 0;
         grabDY = 0;
-        longTimer = setTimeout(() => {
-          longFired = true;
-          gestureMode = null;
-          mapUI.draggingViewport = false;
-          mapUI.pendingSpawn = toCell(p);
-          if (navigator.vibrate) navigator.vibrate(30);
-          render();
-        }, 550);
       }
       mini.setPointerCapture(ev.pointerId);
     };
     mini.onpointermove = (ev) => {
-      if (longFired) return;
       if (gestureMode === 'tap'
           && Math.hypot(ev.clientX - downClient.x, ev.clientY - downClient.y) > 10) {
-        clearTimeout(longTimer); // real movement — not a tap or long-press
         if (tokenPlacementMode()) return; // stay in tap mode: place where the finger releases
         gestureMode = 'camera';
         mapUI.draggingViewport = true;
@@ -585,8 +579,6 @@
       send({ ...cam, center_x: dragX, center_y: dragY });
     };
     mini.onpointerup = (ev) => {
-      clearTimeout(longTimer);
-      if (longFired) { gestureMode = null; return; }
       if (gestureMode === 'camera') {
         endDrag();
       } else if (gestureMode === 'tap') {
@@ -612,7 +604,6 @@
       gestureMode = null;
     };
     mini.onpointercancel = () => {
-      clearTimeout(longTimer);
       if (gestureMode === 'camera') endDrag();
       gestureMode = null;
     };
@@ -621,7 +612,7 @@
     const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
     box.appendChild(el(`<p class="small" style="margin:4px 0;${sel ? 'color:var(--gold)' : ''}">${sel
       ? `♟ Tap the minimap to move <strong>${esc(sel.label)}</strong> there (arrows fine-tune).`
-      : 'Tap = aim camera · drag = pan · <strong>long-press = spawn a token there</strong>.'}</p>`));
+      : 'Tap = aim camera · drag = pan. Select a token below to place it by tapping.'}</p>`));
     box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
       The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
 
@@ -701,12 +692,9 @@
     const box = el(`<div></div>`);
     box.appendChild(el(`<h3 style="margin:4px 0">♟ Tokens <span class="muted small">(${dims.cols}×${dims.rows} grid)</span></h3>`));
 
-    // create form (also the long-press spawn form — then it carries the cell)
-    const spawn = mapUI.pendingSpawn;
-    const form = el(`<div style="${spawn ? 'border:1px solid var(--gold);border-radius:10px;padding:8px;margin:6px 0' : ''}"></div>`);
-    if (spawn) {
-      form.appendChild(el(`<div class="small" style="color:var(--gold)">✨ New token at (${spawn.col},${spawn.row}) — from your long-press:</div>`));
-    }
+    // create form — new tokens land at the camera center, then select + tap
+    // the minimap to put them exactly where you want
+    const form = el(`<div></div>`);
     const row1 = el(`<div class="btn-row"></div>`);
     const label = el(`<input type="text" placeholder="Ogre" style="max-width:130px" maxlength="30">`);
     label.value = mapUI.newLabel;
@@ -727,9 +715,9 @@
       mapUI.newShape = snap.config.TOKEN_DEFAULT_SHAPES[kind.value];
       render();
     };
-    const addBtn = el(`<button class="mini primary">${spawn ? '✓ spawn here' : '+ place at camera'}</button>`);
+    const addBtn = el(`<button class="mini primary">+ add token</button>`);
     addBtn.onclick = () => {
-      const at = spawn || CampfireMap.clampToGrid(map,
+      const at = CampfireMap.clampToGrid(map,
         CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).col,
         CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).row);
       const payload = {
@@ -749,14 +737,8 @@
       }
       conn.action('token.create', payload);
       mapUI.newLabel = '';
-      mapUI.pendingSpawn = null;
     };
     row1.append(label, kind, charSel, addBtn);
-    if (spawn) {
-      const cancelSpawn = el(`<button class="mini ghost">cancel</button>`);
-      cancelSpawn.onclick = () => { mapUI.pendingSpawn = null; render(); };
-      row1.appendChild(cancelSpawn);
-    }
     form.appendChild(row1);
     const sizeRow = el(`<div class="btn-row" style="align-items:center"></div>`);
     const shapeSel = el(`<select style="max-width:110px"><option value="circle">● round</option><option value="square">■ square</option></select>`);
@@ -840,7 +822,7 @@
         box.appendChild(sizeEdit);
       }
     }
-    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — long-press the minimap to spawn one, or use the form above.</p>`));
+    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — add one above, then select it and tap the minimap to place it.</p>`));
     return box;
   }
 
