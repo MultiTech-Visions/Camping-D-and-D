@@ -347,18 +347,30 @@
 
   function conditionsSection(me) {
     const box = el(`<div class="card"><h3>Conditions</h3></div>`);
-    const chips = el(`<div class="chips"></div>`);
-    for (const kind of snap.config.CONDITIONS[me.system]) {
-      const existing = me.conditions.find((x) => x.kind === kind);
-      const chip = el(`<span class="chip ${existing ? 'on' : ''} ${kind === 'dead' ? 'chip-dead' : ''}">${kind}${existing ? ' <span class="x">✕</span>' : ''}</span>`);
-      chip.onclick = () => {
-        existing
-          ? conn.action('condition.remove', { condition_id: existing.id })
-          : conn.action('condition.add', { char_id: me.id, kind });
-      };
-      chips.appendChild(chip);
+    if (me.conditions.length === 0) {
+      box.appendChild(el(`<p class="muted small">Nothing — healthy as a horse.</p>`));
     }
-    box.appendChild(chips);
+    for (const c of me.conditions) {
+      const row = el(`<div class="attr-row" style="padding:5px 0"></div>`);
+      row.appendChild(el(`<span style="flex:1">⚑ ${esc(c.kind)}</span>`));
+      const del = el(`<button class="mini danger ghost">✕</button>`);
+      del.onclick = () => conn.action('condition.remove', { condition_id: c.id });
+      row.appendChild(del);
+      box.appendChild(row);
+    }
+    const add = el(`<div class="btn-row"></div>`);
+    const input = el(`<input type="text" list="my-cond-suggestions" placeholder="poisoned, blessed, anything…" maxlength="60" style="max-width:220px">`);
+    const btn = el(`<button class="mini">+ add</button>`);
+    const doAdd = () => {
+      if (!input.value.trim()) return;
+      conn.action('condition.add', { char_id: me.id, kind: input.value.trim() });
+      input.value = '';
+    };
+    btn.onclick = doAdd;
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') doAdd(); };
+    add.append(input, btn);
+    box.appendChild(add);
+    box.appendChild(el(`<datalist id="my-cond-suggestions">${snap.config.CONDITIONS[me.system].map((k) => `<option value="${esc(k)}">`).join('')}</datalist>`));
     return box;
   }
 

@@ -284,10 +284,15 @@
         return card;
       }
 
-      // simple gray box for non-character entries: name only, same turn highlight
+      // simple gray box for non-character entries: name (+ visible conditions),
+      // same turn highlight
       function customCard(e, isTurn) {
-        return el(`<div class="card ${isTurn ? 'turn-active' : ''}" style="background:#33343a">
+        const card = el(`<div class="card ${isTurn ? 'turn-active' : ''}" style="background:#33343a">
           <strong style="color:#fff">${isTurn ? '▶ ' : ''}${esc(e.label)}</strong></div>`);
+        if (e.conditions.length > 0) {
+          card.appendChild(el(`<div class="small muted">${e.conditions.map((x) => esc(x.kind)).join(' · ')}</div>`));
+        }
+        return card;
       }
 
       const seenCharIds = new Set();
