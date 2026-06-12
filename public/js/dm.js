@@ -761,6 +761,10 @@
     const box = el(`<div></div>`);
     box.appendChild(el(`<h3 style="margin:4px 0">♟ Tokens <span class="muted small">(${dims.cols}×${dims.rows} grid)</span></h3>`));
 
+    const atCamera = () => CampfireMap.clampToGrid(map,
+      CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).col,
+      CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).row);
+
     // create form — new tokens land at the camera center, then select + tap
     // the minimap to put them exactly where you want
     const form = el(`<div></div>`);
@@ -786,9 +790,7 @@
     };
     const addBtn = el(`<button class="mini primary">+ add token</button>`);
     addBtn.onclick = () => {
-      const at = CampfireMap.clampToGrid(map,
-        CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).col,
-        CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).row);
+      const at = atCamera();
       const payload = {
         kind: mapUI.newKind, col: at.col, row: at.row, color: mapUI.newColor,
         shape: mapUI.newShape, w: mapUI.newW, h: mapUI.newH,
@@ -823,6 +825,27 @@
     form.appendChild(sizeRow);
     form.appendChild(colorPicker(mapUI.newColor, (c) => { mapUI.newColor = c; render(); }));
     box.appendChild(form);
+
+    // one-tap tokens for initiative entries that aren't on the map yet
+    // (matched by name) — spawns at the camera, pre-selected for tap-placement
+    const unmade = snap.initiative.entries.filter((e) =>
+      e.char_id === null && !snap.tokens.some((t) => t.label.toLowerCase() === e.label.toLowerCase()));
+    if (unmade.length > 0) {
+      const quick = el(`<div class="btn-row"></div>`);
+      quick.appendChild(el(`<span class="muted small">from initiative:</span>`));
+      for (const e of unmade) {
+        const b = el(`<button class="mini ghost">♟ ${esc(e.label)}</button>`);
+        b.onclick = () => {
+          const at = atCamera();
+          conn.action('token.create', {
+            kind: 'monster', label: e.label, col: at.col, row: at.row,
+            shape: 'circle', w: 1, h: 1,
+          });
+        };
+        quick.appendChild(b);
+      }
+      box.appendChild(quick);
+    }
 
     // token list; tap to select → d-pad + 🎨 recolor (and minimap tap-to-move)
     for (const t of snap.tokens) {
@@ -872,6 +895,21 @@
         const del = el(`<button class="mini danger ghost">✕</button>`);
         del.onclick = (ev) => { ev.stopPropagation(); mapUI.selectedToken = null; conn.action('token.delete', { token_id: t.id }); };
         pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, resize);
+        // one tap into the turn order: characters via their entry, others by name
+        if (t.kind !== 'glow') {
+          const inInitiative = t.char_id !== null
+            ? snap.initiative.entries.some((e) => e.char_id === t.char_id)
+            : snap.initiative.entries.some((e) => e.char_id === null && e.label.toLowerCase() === t.label.toLowerCase());
+          if (!inInitiative) {
+            const init = el(`<button class="mini ghost" title="add ${esc(t.label)} to the initiative order">⚔</button>`);
+            init.onclick = (ev) => {
+              ev.stopPropagation();
+              if (t.char_id !== null) conn.action('initiative.add', { char_id: t.char_id });
+              else conn.action('initiative.add_custom', { label: t.label });
+            };
+            pad.appendChild(init);
+          }
+        }
         if (t.kind !== 'glow') {
           const artFile = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
           const artBtn = el(`<button class="mini ghost" title="${t.art ? 'replace this token’s image' : 'use an image for this token (a 3x3 dragon deserves a dragon)'}">🖼</button>`);
