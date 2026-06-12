@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS character (
   notes           TEXT    NOT NULL,
   encounters_done INTEGER NOT NULL,
   pending_points  INTEGER NOT NULL,
+  token_art       TEXT    NOT NULL DEFAULT '',  -- portrait; auto-applied to their map token
   dnd_sheet       TEXT    NOT NULL   -- JSON for dnd5e characters; '' for campfire
 );
 
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS token (
   h           INTEGER NOT NULL DEFAULT 1,
   shape       TEXT    NOT NULL DEFAULT 'circle' CHECK (shape IN ('circle','square')),
   color       TEXT    NOT NULL,    -- '#rrggbb' disc color (mirrors glow_color for glows)
+  art         TEXT,                -- uploaded image path; null = plain colored shape
   glow_color  TEXT,
   glow_radius REAL,
   glow_pulse  REAL
@@ -136,6 +138,12 @@ if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'w')) {
   db.exec(`ALTER TABLE token ADD COLUMN shape TEXT NOT NULL DEFAULT 'circle'`);
   db.exec(`UPDATE token SET shape = 'square' WHERE kind = 'terrain'`);
 }
+if (!db.prepare(`PRAGMA table_info(character)`).all().some((c) => c.name === 'token_art')) {
+  db.exec(`ALTER TABLE character ADD COLUMN token_art TEXT NOT NULL DEFAULT ''`);
+}
+if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'art')) {
+  db.exec(`ALTER TABLE token ADD COLUMN art TEXT`);
+}
 if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'color')) {
   db.exec(`ALTER TABLE token ADD COLUMN color TEXT NOT NULL DEFAULT ''`);
   db.exec(`UPDATE token SET color = CASE kind
@@ -157,14 +165,14 @@ db.prepare(`INSERT OR IGNORE INTO runtime (id, json) VALUES (1, ?)`)
 const stmts = {
   insertCharacter: db.prepare(`
     INSERT INTO character (system, name, concept, brawn, constitution, magic, wits,
-      flavor, hidden_desire, gear, notes, encounters_done, pending_points, dnd_sheet)
+      flavor, hidden_desire, gear, notes, encounters_done, pending_points, token_art, dnd_sheet)
     VALUES (@system, @name, @concept, @brawn, @constitution, @magic, @wits,
-      @flavor, @hidden_desire, @gear, @notes, @encounters_done, @pending_points, @dnd_sheet)`),
+      @flavor, @hidden_desire, @gear, @notes, @encounters_done, @pending_points, @token_art, @dnd_sheet)`),
   updateCharacter: db.prepare(`
     UPDATE character SET name=@name, concept=@concept, brawn=@brawn, constitution=@constitution,
       magic=@magic, wits=@wits, flavor=@flavor, hidden_desire=@hidden_desire, gear=@gear,
       notes=@notes, encounters_done=@encounters_done, pending_points=@pending_points,
-      dnd_sheet=@dnd_sheet WHERE id=@id`),
+      token_art=@token_art, dnd_sheet=@dnd_sheet WHERE id=@id`),
   deleteCharacter: db.prepare(`DELETE FROM character WHERE id=?`),
   allCharacters: db.prepare(`SELECT * FROM character ORDER BY id`),
 
@@ -196,12 +204,12 @@ const stmts = {
   allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
 
   insertToken: db.prepare(`
-    INSERT INTO token (label, kind, char_id, col, row, w, h, shape, color, glow_color, glow_radius, glow_pulse)
-    VALUES (@label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @glow_color, @glow_radius, @glow_pulse)`),
+    INSERT INTO token (label, kind, char_id, col, row, w, h, shape, color, art, glow_color, glow_radius, glow_pulse)
+    VALUES (@label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @art, @glow_color, @glow_radius, @glow_pulse)`),
   updateToken: db.prepare(`
     UPDATE token SET label=@label, kind=@kind, char_id=@char_id, col=@col, row=@row,
       w=@w, h=@h, shape=@shape,
-      color=@color, glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
+      color=@color, art=@art, glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
   deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
   allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 

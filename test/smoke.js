@@ -400,6 +400,43 @@ check('token size + shape: footprints, bounds, resize clamping', () => {
   ops['token.delete']({ token_id: wall });
 });
 
+check('profile edit + portrait: name/concept update, art flows to pc token', () => {
+  ops['character.update_sheet']({ char_id: heroId, name: 'Tharn the Renamed', concept: 'storm-priest, reformed' });
+  assert.strictEqual(state.characters.get(heroId).name, 'Tharn the Renamed');
+  throws(() => ops['character.update_sheet']({ char_id: heroId, name: '  ' })); // can't blank a name
+  throws(() => ops['character.update_sheet']({ char_id: heroId, token_art: 'http://evil/x.png' }));
+
+  // clear the hero token left on the board by the earlier grid checks
+  const leftover = [...state.tokens.values()].find((t) => t.char_id === heroId);
+  if (leftover) ops['token.delete']({ token_id: leftover.id });
+
+  // portrait set at character level → a freshly placed pc token wears it
+  ops['character.update_sheet']({ char_id: heroId, token_art: '/assets/tokens/token-hero.png' });
+  const tok = ops['token.create']({ label: 'Tharn', kind: 'pc', char_id: heroId, col: 0, row: 0 }).created_token_id;
+  assert.strictEqual(state.tokens.get(tok).art, '/assets/tokens/token-hero.png');
+  // changing the token art mirrors back to the character…
+  ops['token.set_art']({ token_id: tok, art: '/assets/tokens/token-hero2.png' });
+  assert.strictEqual(state.characters.get(heroId).token_art, '/assets/tokens/token-hero2.png');
+  // …and updating the profile updates the live token
+  ops['character.update_sheet']({ char_id: heroId, token_art: '' });
+  assert.strictEqual(state.tokens.get(tok).art, null);
+  ops['token.delete']({ token_id: tok });
+});
+
+check('token art: uploaded-path rails, clearable, no art on glows', () => {
+  const drake = ops['token.create']({ label: 'Dragon', kind: 'monster', col: 4, row: 4, w: 3, h: 3 }).created_token_id;
+  ops['token.set_art']({ token_id: drake, art: '/assets/tokens/token-123.png' });
+  assert.strictEqual(state.tokens.get(drake).art, '/assets/tokens/token-123.png');
+  throws(() => ops['token.set_art']({ token_id: drake, art: '/etc/passwd' }));
+  throws(() => ops['token.set_art']({ token_id: drake, art: '/assets/maps/sneaky.png' }));
+  ops['token.set_art']({ token_id: drake, art: null });
+  assert.strictEqual(state.tokens.get(drake).art, null);
+  const torch = ops['token.create']({ label: 'Torch', kind: 'glow', col: 1, row: 1, glow_radius: 2, glow_pulse: 1 }).created_token_id;
+  throws(() => ops['token.set_art']({ token_id: torch, art: '/assets/tokens/token-1.png' }));
+  ops['token.delete']({ token_id: drake });
+  ops['token.delete']({ token_id: torch });
+});
+
 check('display viewport report (for the GM minimap projection box)', () => {
   ops['display.report_viewport']({ width: 1920, height: 1080 });
   assert.deepStrictEqual(state.display_viewport, { width: 1920, height: 1080 });

@@ -11,6 +11,9 @@
   let snap = null;
   let pendingSnap = null;
   let builderSystem = params.get('new'); // 'campfire' | 'dnd5e' | null
+  let builderTokenArt = ''; // portrait uploaded during creation
+  let editorScreen = null;  // null | 'profile' | 'dnd-stats' — survives snapshot re-renders
+  let profilePendingArt = null; // portrait staged in the profile editor until Save
 
   const conn = CampfireWS.connect({
     role: 'player',
@@ -31,6 +34,7 @@
         myCharId = msg.created_char_id;
         localStorage.setItem('campfire_char_id', String(myCharId));
         builderSystem = null;
+        builderTokenArt = '';
         history.replaceState(null, '', '/play');
         conn.setCharId(myCharId);
         conn.toast('Welcome to the saga! 🔥', true);
@@ -77,7 +81,106 @@
       root.appendChild(el(`<div class="banner">No character selected. <a href="/">Pick or create one</a>.</div>`));
       return;
     }
+    if (editorScreen === 'profile') return renderProfileEdit(me);
+    if (editorScreen === 'dnd-stats' && me.system === 'dnd5e') return renderDndEdit(me);
     me.system === 'campfire' ? renderCampfireTracker(me) : renderDndTracker(me);
+  }
+
+  // --- shared portrait/token-image bits --------------------------------------
+  async function uploadTokenImage(file) {
+    const res = await fetch('/upload/token', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+    if (!res.ok) throw new Error((await res.json()).error);
+    return (await res.json()).art;
+  }
+
+  function portraitRow(current, onSet) {
+    const row = el(`<div class="btn-row"></div>`);
+    if (current) {
+      row.appendChild(el(`<span style="display:inline-block;width:40px;height:40px;border-radius:50%;background-image:url('${current}');background-size:cover;background-position:center;border:2px solid var(--line)"></span>`));
+    }
+    const fileIn = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
+    const btn = el(`<button class="mini" type="button">🖼 ${current ? 'Change' : 'Add'} token image</button>`);
+    btn.onclick = () => fileIn.click();
+    fileIn.onchange = async () => {
+      const file = fileIn.files[0];
+      if (!file) return;
+      try {
+        conn.toast('Uploading…', true);
+        onSet(await uploadTokenImage(file));
+      } catch (err) {
+        conn.toast(`upload failed: ${err.message}`, false);
+      }
+    };
+    row.append(btn, fileIn);
+    if (current) {
+      const clear = el(`<button class="mini ghost" type="button" title="remove image">🚫</button>`);
+      clear.onclick = () => onSet('');
+      row.appendChild(clear);
+    }
+    return row;
+  }
+
+  // Self-contained picker that repaints in place — safe inside forms, where a
+  // full re-render would wipe everything the player has typed.
+  function portraitPicker(initial, onChange) {
+    let current = initial;
+    const wrap = el(`<div></div>`);
+    const paint = () => {
+      wrap.innerHTML = '';
+      wrap.appendChild(portraitRow(current, (art) => {
+        current = art;
+        if (onChange) onChange(art);
+        paint();
+      }));
+    };
+    paint();
+    return { el: wrap, value: () => current };
+  }
+
+  // --- profile editor: fix the typo in your name, swap your portrait ---------
+  function renderProfileEdit(me) {
+    if (profilePendingArt === null) profilePendingArt = me.token_art;
+    root.innerHTML = '';
+    root.appendChild(el(`<h2>✏ Edit profile</h2>`));
+    const card = el(`<div class="card"></div>`);
+    card.appendChild(el(`<label>Name</label>`));
+    const nameIn = el(`<input type="text" maxlength="40">`);
+    nameIn.value = me.name;
+    card.appendChild(nameIn);
+    card.appendChild(el(`<label>Concept</label>`));
+    const conceptIn = el(`<input type="text" maxlength="100">`);
+    conceptIn.value = me.concept;
+    card.appendChild(conceptIn);
+    let flavorIn = null;
+    if (me.system === 'campfire') {
+      card.appendChild(el(`<label>Flavor label (cosmetic)</label>`));
+      flavorIn = el(`<input type="text" maxlength="40">`);
+      flavorIn.value = me.flavor;
+      card.appendChild(flavorIn);
+    }
+    card.appendChild(el(`<label>Token image</label>`));
+    card.appendChild(portraitPicker(profilePendingArt, (art) => { profilePendingArt = art; }).el);
+
+    const row = el(`<div class="btn-row" style="margin-top:12px"></div>`);
+    const save = el(`<button class="primary">Save</button>`);
+    save.onclick = () => {
+      const payload = {
+        char_id: me.id,
+        name: nameIn.value.trim(),
+        concept: conceptIn.value.trim(),
+        token_art: profilePendingArt,
+      };
+      if (flavorIn) payload.flavor = flavorIn.value.trim();
+      conn.action('character.update_sheet', payload);
+      editorScreen = null;
+      profilePendingArt = null;
+      conn.toast('Profile saved ✓', true);
+    };
+    const cancel = el(`<button class="ghost">Cancel</button>`);
+    cancel.onclick = () => { editorScreen = null; profilePendingArt = null; render(); };
+    row.append(save, cancel);
+    card.appendChild(row);
+    root.appendChild(card);
   }
 
   // =========================================================================
@@ -129,6 +232,8 @@
     card.appendChild(el(`<label>Hidden desire <span class="small">(optional — only the GM ever sees this)</span></label>`));
     const desireIn = el(`<input type="text" id="b-desire" maxlength="200" placeholder="I secretly want…">`);
     card.appendChild(desireIn);
+    card.appendChild(el(`<label>Token image <span class="small">(optional — your face on the battle map)</span></label>`));
+    card.appendChild(portraitPicker(builderTokenArt, (art) => { builderTokenArt = art; }).el);
 
     const create = el(`<button class="primary" style="width:100%;margin-top:14px;font-size:1.1rem">🔥 Join the saga</button>`);
     create.disabled = remaining !== 0;
@@ -141,6 +246,7 @@
         magic: cfDraft.magic, wits: cfDraft.wits,
         flavor: flavorIn.value.trim(),
         hidden_desire: desireIn.value.trim(),
+        token_art: builderTokenArt,
       });
     };
     card.appendChild(create);
@@ -249,6 +355,8 @@
 
     field('Gear (optional)', 'd-gear', 'text', '');
     field('Secret / hook only the GM sees (optional)', 'd-desire', 'text', '', 'maxlength="200"');
+    card.appendChild(el(`<label>Token image <span class="small">(optional — your face on the battle map)</span></label>`));
+    card.appendChild(portraitPicker(builderTokenArt, (art) => { builderTokenArt = art; }).el);
 
     const create = el(`<button class="primary" style="width:100%;margin-top:14px;font-size:1.1rem">🐉 Join the party</button>`);
     create.onclick = () => {
@@ -278,6 +386,7 @@
         concept: f['d-concept'].value.trim(),
         gear: f['d-gear'].value.trim(),
         hidden_desire: f['d-desire'].value.trim(),
+        token_art: builderTokenArt,
         sheet,
       });
     };
@@ -332,6 +441,33 @@
       mv(-1, 0, '◀'), el(`<span></span>`), mv(1, 0, '▶'),
       el(`<span></span>`), mv(0, 1, '▼'), el(`<span></span>`));
     box.appendChild(pad);
+
+    // your token, your face: players set their own token image
+    const artRow = el(`<div class="btn-row" style="justify-content:center;margin-top:10px"></div>`);
+    const artFile = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
+    if (mine.art) {
+      artRow.appendChild(el(`<span style="display:inline-block;width:34px;height:34px;border-radius:${mine.shape === 'square' ? '6px' : '50%'};background-image:url('${mine.art}');background-size:cover;background-position:center;border:2px solid var(--line)"></span>`));
+    }
+    const artBtn = el(`<button class="mini">🖼 ${mine.art ? 'Change my token image' : 'Set my token image'}</button>`);
+    artBtn.onclick = () => artFile.click();
+    artFile.onchange = async () => {
+      const file = artFile.files[0];
+      if (!file) return;
+      conn.toast('Uploading…', true);
+      const res = await fetch('/upload/token', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+      if (!res.ok) {
+        conn.toast(`upload failed: ${(await res.json()).error}`, false);
+        return;
+      }
+      conn.action('token.set_art', { token_id: mine.id, art: (await res.json()).art });
+    };
+    artRow.append(artBtn, artFile);
+    if (mine.art) {
+      const clear = el(`<button class="mini ghost" title="back to a plain colored token">🚫</button>`);
+      clear.onclick = () => conn.action('token.set_art', { token_id: mine.id, art: null });
+      artRow.appendChild(clear);
+    }
+    box.appendChild(artRow);
     return box;
   }
 
@@ -403,6 +539,9 @@
   function headerSection(me) {
     const sys = me.system === 'campfire' ? '🔥' : '🐉';
     const box = el(`<div class="card-head"><h2 style="margin-top:6px;border:none">${sys} ${esc(me.name)}</h2></div>`);
+    const edit = el(`<button class="mini ghost" title="edit name, concept, token image">✏ edit</button>`);
+    edit.onclick = () => { editorScreen = 'profile'; profilePendingArt = null; render(); };
+    box.appendChild(edit);
     const sub = el(`<div class="muted">${esc(me.concept)}${me.flavor ? ` · <em>${esc(me.flavor)}</em>` : ''}</div>`);
     const wrap = el(`<div></div>`);
     wrap.append(box, sub);
@@ -527,7 +666,10 @@
       const top = ((map.offset_y + t.row * map.cell_size) / map.image_h) * 100;
       const wPct = ((t.w * map.cell_size) / map.image_w) * 100;
       const hPct = ((t.h * map.cell_size) / map.image_h) * 100;
-      const tok = el(`<div style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;border-radius:${t.shape === 'square' ? '12%' : '50%'};background:${color};opacity:.85;border:1px solid #000"></div>`);
+      const fill = t.art
+        ? `background-image:url('${t.art}');background-size:cover;background-position:center`
+        : `background:${color}`;
+      const tok = el(`<div style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;border-radius:${t.shape === 'square' ? '12%' : '50%'};${fill};opacity:${t.art ? 1 : 0.85};border:1px solid #000"></div>`);
       viewer.tokenLayer.appendChild(tok);
       viewer.tokenLayer.appendChild(el(`<div style="position:absolute;left:${left + wPct / 2}%;top:${top + hPct}%;transform:translateX(-50%);color:#fff;font-size:9px;text-shadow:0 1px 2px #000;white-space:nowrap">${esc(t.label)}</div>`));
     }
@@ -684,7 +826,7 @@
     statCard.appendChild(abGrid);
 
     const editBtn = el(`<button class="mini ghost">✏ Edit stats</button>`);
-    editBtn.onclick = () => renderDndEdit(me);
+    editBtn.onclick = () => { editorScreen = 'dnd-stats'; render(); };
     statCard.appendChild(editBtn);
     root.appendChild(statCard);
 
@@ -849,6 +991,17 @@
       parent.appendChild(wrap);
       f[id] = input;
     }
+    const r0 = el(`<div class="field-row"></div>`);
+    const classWrap = el(`<div><label>Class</label></div>`);
+    const classIn = el(`<input type="text" maxlength="30">`);
+    classIn.value = s.class_name;
+    classWrap.appendChild(classIn);
+    const raceWrap = el(`<div><label>Race</label></div>`);
+    const raceIn = el(`<input type="text" maxlength="30">`);
+    raceIn.value = s.race;
+    raceWrap.appendChild(raceIn);
+    r0.append(classWrap, raceWrap);
+    card.appendChild(r0);
     const r1 = el(`<div class="field-row"></div>`);
     fieldIn(r1, 'Level', 'e-level', s.level, 1, 20);
     fieldIn(r1, 'AC', 'e-ac', s.ac, 0, 40);
@@ -895,6 +1048,8 @@
     save.onclick = () => {
       const num = (id) => Number(f[id].value);
       const next = JSON.parse(JSON.stringify(s));
+      next.class_name = classIn.value.trim();
+      next.race = raceIn.value.trim();
       next.level = num('e-level'); next.ac = num('e-ac'); next.prof_bonus = num('e-prof'); next.speed = num('e-speed');
       next.hp_max = num('e-hpmax');
       next.hp = Math.min(next.hp, next.hp_max);
@@ -907,10 +1062,11 @@
         next.skills[sk.key].misc = num(`e-misc-${sk.key}`);
       }
       conn.action('character.update_dnd', { char_id: me.id, sheet: next });
+      editorScreen = null;
       render();
     };
     const cancel = el(`<button class="ghost">Cancel</button>`);
-    cancel.onclick = () => render();
+    cancel.onclick = () => { editorScreen = null; render(); };
     row.append(save, cancel);
     card.appendChild(row);
     root.appendChild(card);
