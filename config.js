@@ -49,6 +49,10 @@ module.exports = {
   CUSTOM_COLOR_LIMIT: 24,
   CAMERA_ZOOM_MIN: 0.05,
   CAMERA_ZOOM_MAX: 20,
+  // Fog of war: a map's primary orientation snaps to these; fog darkness dials
+  // the projector clouds from light gray (0) to pitch black (1).
+  MAP_ROTATIONS: [0, 90, 180, 270],
+  FOG_DARKNESS_DEFAULT: 0.85,
   MAP_MAX_BYTES: 40 * 1024 * 1024, // Pi 5 single-texture territory; tiling is post-MVP
 
   // --- D&D 5e sheet bounds (sanity rails, not rules enforcement) ---

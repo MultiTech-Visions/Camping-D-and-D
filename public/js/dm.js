@@ -334,6 +334,7 @@
       };
       head.append(rename, recal);
       box.appendChild(head);
+      box.appendChild(mapSetupControls());
       box.appendChild(cameraRemote());
       box.appendChild(tokenManager());
       const foot = el(`<div class="btn-row"></div>`);
@@ -745,6 +746,307 @@
       box.appendChild(list);
     }
     return box;
+  }
+
+  // Map orientation + fog-of-war setup, surfaced right under the map header so
+  // the GM lands here straight after calibrating. Orientation seeds how the map
+  // opens on the projector; fog hides everything until the GM reveals it.
+  function mapSetupControls() {
+    const map = snap.map;
+    const box = el(`<div style="border-bottom:1px dashed var(--line);padding-bottom:10px;margin-bottom:10px"></div>`);
+    box.appendChild(el(`<h3 style="margin:4px 0">🧭 Orientation &amp; fog</h3>`));
+
+    const oriRow = el(`<div class="btn-row" style="align-items:center"></div>`);
+    oriRow.appendChild(el(`<span class="small">opens facing:</span>`));
+    for (const deg of snap.config.MAP_ROTATIONS) {
+      const on = (map.base_rotation || 0) === deg;
+      const b = el(`<button class="mini ${on ? '' : 'ghost'}" title="primary orientation on the projector">${deg}°</button>`);
+      b.onclick = () => conn.action('map.set_base_rotation', { map_id: map.id, rotation_deg: deg });
+      oriRow.appendChild(b);
+    }
+    box.appendChild(oriRow);
+
+    const fogRow = el(`<div class="btn-row"></div>`);
+    const fogBtn = el(`<button class="mini ${map.fog_enabled ? '' : 'ghost'}" title="hide the map until you reveal it">🌫 Fog ${map.fog_enabled ? 'on' : 'off'}</button>`);
+    fogBtn.onclick = () => conn.action('map.set_fog_enabled', { map_id: map.id, enabled: !map.fog_enabled });
+    fogRow.appendChild(fogBtn);
+    if (map.fog_enabled) {
+      const edit = el(`<button class="mini primary">✏️ Edit fog</button>`);
+      edit.onclick = openFogEditor;
+      fogRow.appendChild(edit);
+    }
+    box.appendChild(fogRow);
+
+    if (map.fog_enabled) {
+      const dark = map.fog_darkness == null ? 0.85 : map.fog_darkness;
+      const darkRow = el(`<div class="btn-row" style="align-items:center"></div>`);
+      darkRow.appendChild(el(`<span class="small">darkness:</span>`));
+      const dial = el(`<input type="range" data-live="1" min="0" max="100" style="flex:1;max-width:170px">`);
+      dial.value = Math.round(dark * 100);
+      const lbl = el(`<span class="muted small">${dial.value}%</span>`);
+      dial.oninput = () => { lbl.textContent = `${dial.value}%`; };
+      dial.onchange = () => conn.action('map.set_fog_darkness', { map_id: map.id, darkness: Number(dial.value) / 100 });
+      darkRow.append(dial, lbl);
+      box.appendChild(darkRow);
+      box.appendChild(el(`<p class="muted small" style="margin:2px 0">Light gray fog → pitch black. Players &amp; the projector only see revealed squares (and any tokens standing in them).</p>`));
+    }
+    return box;
+  }
+
+  // =========================================================================
+  // Fog-of-war editor: fullscreen, like the players' map view (pinch to zoom,
+  // drag to pan) but it paints visibility. 🔒 locks navigation so one finger
+  // paints cells; two fingers always still pinch/pan. Green = revealed, red =
+  // hidden, both translucent so the map shows through. Edits commit to the
+  // server when a stroke ends.
+  // =========================================================================
+  let fog = null;
+
+  function openFogEditor() {
+    if (fog || !snap.map || !snap.map.fog_enabled) return;
+    const map = { ...snap.map };
+    const dims = CampfireMap.gridDims(map);
+    const len = dims.cols * dims.rows;
+    const work = (map.fog && map.fog.length === len ? map.fog : CampfireMap.fogAllHidden(map)).split('');
+
+    const overlay = el(`<div style="position:fixed;inset:0;background:#0c0906;z-index:60;overflow:hidden;touch-action:none"></div>`);
+    const holder = el(`<div style="position:absolute;left:0;top:0;transform-origin:0 0"></div>`);
+    const img = el(`<img draggable="false" style="display:block;width:100%;user-select:none">`);
+    const cv = el(`<canvas style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>`);
+    holder.append(img, cv);
+    overlay.appendChild(holder);
+
+    // toolbar
+    const bar = el(`<div style="position:absolute;left:0;right:0;top:0;display:flex;flex-wrap:wrap;gap:6px;padding:8px;background:linear-gradient(#0c0906ee,#0c090600);z-index:2"></div>`);
+    const lockBtn = el(`<button></button>`);
+    const revealBtn = el(`<button class="mini">🟢 Reveal</button>`);
+    const hideBtn = el(`<button class="mini">🔴 Hide</button>`);
+    const lassoBtn = el(`<button class="mini" title="draw a loop to fill the area inside">⭕ Lasso</button>`);
+    const allOn = el(`<button class="mini ghost" title="reveal the whole map">reveal all</button>`);
+    const allOff = el(`<button class="mini ghost" title="hide the whole map">hide all</button>`);
+    const doneBtn = el(`<button class="mini primary">✓ Done</button>`);
+    bar.append(lockBtn, revealBtn, hideBtn, lassoBtn, allOn, allOff, doneBtn);
+    overlay.appendChild(bar);
+    const hint = el(`<div style="position:absolute;left:0;right:0;bottom:0;padding:8px;text-align:center;font-size:12px;color:#f3e9d8;background:linear-gradient(#0c090600,#0c0906dd);z-index:2"></div>`);
+    overlay.appendChild(hint);
+    document.body.appendChild(overlay);
+
+    fog = {
+      overlay, holder, img, cv, ctx: cv.getContext('2d'), map,
+      cols: dims.cols, rows: dims.rows, work,
+      scale: 1, tx: 0, ty: 0,
+      mode: 'nav', brush: 'reveal', tool: 'brush',
+      lassoPts: null, lastPaint: null, dirty: false,
+    };
+    fog.apply = () => { holder.style.transform = `translate(${fog.tx}px, ${fog.ty}px) scale(${fog.scale})`; };
+
+    const baseW = overlay.clientWidth;
+    holder.style.width = `${baseW}px`;
+    cv.width = Math.max(1, Math.round(baseW));
+    cv.height = Math.max(1, Math.round(baseW * (map.image_h / map.image_w)));
+    img.onload = drawFogEditor;
+    img.src = map.image_path;
+    fog.ty = (overlay.clientHeight - baseW * (map.image_h / map.image_w)) / 2;
+    fog.apply();
+
+    const clampView = () => {
+      const vw = overlay.clientWidth, vh = overlay.clientHeight;
+      const cw = holder.offsetWidth * fog.scale, ch = holder.offsetHeight * fog.scale;
+      fog.tx = cw <= vw ? (vw - cw) / 2 : Math.min(0, Math.max(vw - cw, fog.tx));
+      fog.ty = ch <= vh ? (vh - ch) / 2 : Math.min(0, Math.max(vh - ch, fog.ty));
+    };
+
+    const toImage = (ev) => {
+      const r = img.getBoundingClientRect();
+      return {
+        x: ((ev.clientX - r.left) / r.width) * map.image_w,
+        y: ((ev.clientY - r.top) / r.height) * map.image_h,
+      };
+    };
+
+    const setCell = (col, row) => {
+      if (col < 0 || row < 0 || col >= fog.cols || row >= fog.rows) return;
+      fog.work[row * fog.cols + col] = fog.brush === 'reveal' ? '1' : '0';
+    };
+    // paint every cell on the segment from the last point to here, so a fast
+    // drag doesn't leave gaps
+    const paintTo = (p) => {
+      const cell = CampfireMap.imageToGrid(map, p.x, p.y);
+      if (fog.lastPaint) {
+        const a = fog.lastPaint, steps = Math.max(1, Math.ceil(Math.hypot(p.x - a.x, p.y - a.y) / (map.cell_size / 2)));
+        for (let i = 1; i <= steps; i++) {
+          const x = a.x + ((p.x - a.x) * i) / steps, y = a.y + ((p.y - a.y) * i) / steps;
+          const g = CampfireMap.imageToGrid(map, x, y);
+          setCell(g.col, g.row);
+        }
+      } else {
+        setCell(cell.col, cell.row);
+      }
+      fog.lastPaint = p;
+      fog.dirty = true;
+      drawFogEditor();
+    };
+
+    const commit = () => {
+      if (!fog.dirty) return;
+      fog.dirty = false;
+      conn.action('map.set_fog', { map_id: map.id, fog: fog.work.join('') });
+    };
+
+    // --- gestures: pinch/pan always on two fingers; one finger paints when
+    //     locked, pans when not -------------------------------------------
+    const pointers = new Map();
+    let pinchStart = null;
+    overlay.onpointerdown = (ev) => {
+      overlay.setPointerCapture(ev.pointerId);
+      pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (pointers.size === 2) {
+        // a second finger cancels any in-progress stroke and starts a pinch
+        fog.lastPaint = null; fog.lassoPts = null; drawFogEditor();
+        const [a, b] = [...pointers.values()];
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        pinchStart = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale: fog.scale, world: { x: (mid.x - fog.tx) / fog.scale, y: (mid.y - fog.ty) / fog.scale } };
+      } else if (pointers.size === 1 && fog.mode === 'paint') {
+        const p = toImage(ev);
+        if (fog.tool === 'lasso') { fog.lassoPts = [p]; }
+        else { fog.lastPaint = null; paintTo(p); }
+      }
+    };
+    overlay.onpointermove = (ev) => {
+      const prev = pointers.get(ev.pointerId);
+      if (!prev) return;
+      const cur = { x: ev.clientX, y: ev.clientY };
+      if (pointers.size === 2 && pinchStart) {
+        pointers.set(ev.pointerId, cur);
+        const [a, b] = [...pointers.values()];
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        fog.scale = Math.min(12, Math.max(1, pinchStart.scale * (Math.hypot(a.x - b.x, a.y - b.y) / pinchStart.dist)));
+        fog.tx = mid.x - pinchStart.world.x * fog.scale;
+        fog.ty = mid.y - pinchStart.world.y * fog.scale;
+        clampView(); fog.apply();
+      } else if (pointers.size === 1) {
+        if (fog.mode === 'paint' && fog.tool === 'lasso' && fog.lassoPts) {
+          fog.lassoPts.push(toImage(ev)); drawFogEditor();
+        } else if (fog.mode === 'paint') {
+          paintTo(toImage(ev));
+        } else {
+          fog.tx += cur.x - prev.x; fog.ty += cur.y - prev.y;
+          pointers.set(ev.pointerId, cur);
+          clampView(); fog.apply();
+        }
+      }
+    };
+    const lift = (ev) => {
+      const wasOne = pointers.size === 1;
+      pointers.delete(ev.pointerId);
+      if (pointers.size < 2) pinchStart = null;
+      if (wasOne && fog.mode === 'paint') {
+        if (fog.tool === 'lasso' && fog.lassoPts) { fillLasso(fog.lassoPts); fog.lassoPts = null; }
+        fog.lastPaint = null;
+        commit();
+      }
+    };
+    overlay.onpointerup = lift;
+    overlay.onpointercancel = lift;
+
+    function fillLasso(pts) {
+      if (pts.length < 3) { drawFogEditor(); return; }
+      // every cell whose center falls inside the drawn loop flips to the brush
+      let minC = fog.cols, maxC = 0, minR = fog.rows, maxR = 0;
+      for (const p of pts) {
+        const g = CampfireMap.imageToGrid(map, p.x, p.y);
+        minC = Math.min(minC, g.col); maxC = Math.max(maxC, g.col);
+        minR = Math.min(minR, g.row); maxR = Math.max(maxR, g.row);
+      }
+      for (let r = Math.max(0, minR); r <= Math.min(fog.rows - 1, maxR); r++) {
+        for (let c = Math.max(0, minC); c <= Math.min(fog.cols - 1, maxC); c++) {
+          const ctr = CampfireMap.cellCenter(map, c, r);
+          if (pointInPolygon(ctr.x, ctr.y, pts)) setCell(c, r);
+        }
+      }
+      fog.dirty = true;
+      drawFogEditor();
+    }
+
+    function pointInPolygon(x, y, pts) {
+      let inside = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+        if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) inside = !inside;
+      }
+      return inside;
+    }
+
+    // --- toolbar wiring -----------------------------------------------------
+    const refreshBar = () => {
+      lockBtn.textContent = fog.mode === 'paint' ? '🖐 Move map' : '🔒 Lock & paint';
+      lockBtn.className = fog.mode === 'paint' ? 'mini primary' : 'mini';
+      revealBtn.className = `mini ${fog.brush === 'reveal' ? '' : 'ghost'}`;
+      hideBtn.className = `mini ${fog.brush === 'hide' ? '' : 'ghost'}`;
+      lassoBtn.className = `mini ${fog.tool === 'lasso' ? '' : 'ghost'}`;
+      hint.innerHTML = fog.mode === 'paint'
+        ? `Painting <strong style="color:${fog.brush === 'reveal' ? '#5fe07a' : '#ff6b5e'}">${fog.brush}</strong> with the ${fog.tool === 'lasso' ? 'lasso (draw a loop)' : 'brush (drag across cells)'} · two fingers still zoom &amp; pan`
+        : 'Drag to pan · pinch to zoom · tap 🔒 to start painting fog';
+    };
+    lockBtn.onclick = () => { fog.mode = fog.mode === 'paint' ? 'nav' : 'paint'; fog.lassoPts = null; fog.lastPaint = null; refreshBar(); drawFogEditor(); };
+    revealBtn.onclick = () => { fog.brush = 'reveal'; if (fog.mode === 'nav') fog.mode = 'paint'; refreshBar(); };
+    hideBtn.onclick = () => { fog.brush = 'hide'; if (fog.mode === 'nav') fog.mode = 'paint'; refreshBar(); };
+    lassoBtn.onclick = () => { fog.tool = fog.tool === 'lasso' ? 'brush' : 'lasso'; if (fog.mode === 'nav') fog.mode = 'paint'; refreshBar(); };
+    allOn.onclick = () => { fog.work = new Array(len).fill('1'); fog.dirty = true; drawFogEditor(); commit(); };
+    allOff.onclick = () => { fog.work = new Array(len).fill('0'); fog.dirty = true; drawFogEditor(); commit(); };
+    doneBtn.onclick = closeFogEditor;
+    refreshBar();
+  }
+
+  function drawFogEditor() {
+    if (!fog) return;
+    const { ctx, cv, map, cols, rows } = fog;
+    const sc = cv.width / map.image_w;
+    const cs = map.cell_size * sc;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // green/red cells, horizontal runs merged to keep fills cheap
+    for (let r = 0; r < rows; r++) {
+      let run = -1, runVal = null;
+      for (let c = 0; c <= cols; c++) {
+        const v = c < cols ? fog.work[r * cols + c] : null;
+        if (v !== runVal) {
+          if (run >= 0) {
+            ctx.fillStyle = runVal === '1' ? 'rgba(60,200,90,0.38)' : 'rgba(210,55,45,0.42)';
+            ctx.fillRect((map.offset_x + run * map.cell_size) * sc, (map.offset_y + r * map.cell_size) * sc, (c - run) * cs, cs);
+          }
+          run = c; runVal = v;
+        }
+      }
+    }
+    // grid lines for orientation
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 0; c <= cols; c++) {
+      const x = (map.offset_x + c * map.cell_size) * sc;
+      ctx.moveTo(x, map.offset_y * sc); ctx.lineTo(x, (map.offset_y + rows * map.cell_size) * sc);
+    }
+    for (let r = 0; r <= rows; r++) {
+      const y = (map.offset_y + r * map.cell_size) * sc;
+      ctx.moveTo(map.offset_x * sc, y); ctx.lineTo((map.offset_x + cols * map.cell_size) * sc, y);
+    }
+    ctx.stroke();
+    // live lasso outline
+    if (fog.lassoPts && fog.lassoPts.length > 1) {
+      ctx.strokeStyle = fog.brush === 'reveal' ? '#5fe07a' : '#ff6b5e';
+      ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
+      ctx.beginPath();
+      ctx.moveTo(fog.lassoPts[0].x * sc, fog.lassoPts[0].y * sc);
+      for (const p of fog.lassoPts) ctx.lineTo(p.x * sc, p.y * sc);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+
+  function closeFogEditor() {
+    if (!fog) return;
+    fog.overlay.remove();
+    fog = null;
   }
 
   function tokenManager() {
