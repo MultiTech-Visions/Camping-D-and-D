@@ -926,7 +926,10 @@
     const isTurn = snap.initiative.turn_id === `char:${c.id}`;
     const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
     const sys = c.system === 'campfire' ? '🔥' : '🐉';
-    card.appendChild(el(`<div class="card-head"><h3>${sys} ${esc(c.name)}</h3><span class="muted small">${esc(c.concept)}</span></div>`));
+    const face = c.token_art
+      ? `<span style="display:inline-block;width:38px;height:38px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
+      : '';
+    card.appendChild(el(`<div class="card-head"><h3 style="display:flex;align-items:center">${face}${sys} ${esc(c.name)}</h3><span class="muted small">${esc(c.concept)}</span></div>`));
     if (c.hidden_desire) {
       card.appendChild(el(`<p class="small" style="color:var(--gold)">🤫 ${esc(c.hidden_desire)}</p>`));
     }

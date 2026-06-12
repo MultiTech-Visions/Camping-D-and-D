@@ -52,7 +52,10 @@ CampfireWS.connect({
       const card = document.createElement('div');
       card.className = 'card' + (c.conditions.some(x => x.kind === 'dead') ? ' is-dead' : '');
       const sys = c.system === 'campfire' ? '🔥 Campfire Saga' : '🐉 D&D 5e';
-      card.innerHTML = `<div class="card-head"><h3>${esc(c.name)}</h3><span class="muted small">${sys}</span></div>
+      const face = c.token_art
+        ? `<span style="display:inline-block;width:42px;height:42px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:8px"></span>`
+        : '';
+      card.innerHTML = `<div class="card-head"><h3 style="display:flex;align-items:center">${face}${esc(c.name)}</h3><span class="muted small">${sys}</span></div>
         <p class="muted">${esc(c.concept)}</p>`;
       const btn = document.createElement('button');
       btn.className = 'primary';
