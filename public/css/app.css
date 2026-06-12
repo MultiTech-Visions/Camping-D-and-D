@@ -176,6 +176,10 @@ label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.
 }
 .portrait-sub { text-align: center; margin-top: 6px; }
 
+/* --- big thumb-friendly d-pad (player remote + GM token mover) --- */
+.dpad { display: grid; grid-template-columns: repeat(3, 84px); gap: 10px; justify-content: center; }
+.dpad button { min-height: 72px; font-size: 1.8rem; font-weight: 700; }
+
 /* --- tabs --- */
 .tabs { display: flex; gap: 6px; margin: 14px 0; }
 .tabs button { flex: 1; border-radius: 10px 10px 0 0; border-bottom: 2px solid transparent; }
