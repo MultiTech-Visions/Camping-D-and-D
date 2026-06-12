@@ -268,6 +268,20 @@ check('camera: view-only transform with zoom rails + bookmarks', () => {
   throws(() => ops['camera.delete_bookmark']({ name: 'ambush' }));
 });
 
+check('initiative visibility: dm_only entries never reach players/display', () => {
+  const { snapshotFor } = require('../state');
+  const reminder = ops['initiative.add_custom']({ label: 'Reinforcements at round 3' }).created_entry_id;
+  ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'dm_only' });
+  assert.ok(snapshotFor('dm', null).initiative.entries.some((e) => e.id === reminder));
+  assert.ok(!snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder), 'projector saw a GM-only entry!');
+  assert.ok(!snapshotFor('player', heroId).initiative.entries.some((e) => e.id === reminder), 'a player saw a GM-only entry!');
+  ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'visible' });
+  assert.ok(snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder));
+  throws(() => ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'sneaky' }));
+  throws(() => ops['initiative.set_visibility']({ entry_id: 'custom:9999', visibility: 'dm_only' }));
+  ops['initiative.remove']({ entry_id: reminder });
+});
+
 check('token colors + saved palette', () => {
   // default by kind, custom on create, recolor after
   const ogre = ops['token.create']({ label: 'Ogre', kind: 'monster', col: 1, row: 1 }).created_token_id;

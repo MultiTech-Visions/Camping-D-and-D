@@ -16,6 +16,7 @@
 
 (function () {
   const turnEl = document.getElementById('d-turn');
+  const orderEl = document.getElementById('d-order');
   const clocksEl = document.getElementById('d-clocks');
   const rosterEl = document.getElementById('d-roster');
   const mapRoot = document.getElementById('map-root');
@@ -221,6 +222,16 @@
         turnEl.textContent = `▶ ${c.name}'s turn`;
       } else {
         turnEl.textContent = `▶ ${turnEntry.label}`;
+      }
+
+      // the full turn order — characters AND custom entries (Ogre, hazards…);
+      // the server already filtered out the GM's dm_only reminders
+      orderEl.innerHTML = '';
+      for (const e of snap.initiative.entries) {
+        const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
+        const name = c ? c.name : e.label;
+        const isTurn = snap.initiative.turn_id === e.id;
+        orderEl.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${c ? '' : '👹 '}${esc(name)}</span>`));
       }
 
       // visible clocks

@@ -85,12 +85,15 @@
       const name = c ? c.name : e.label;
       const icon = c ? (c.system === 'campfire' ? '🔥' : '🐉') : '👹';
       const isTurn = snap.initiative.turn_id === e.id;
-      const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}"></div>`);
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}</span>`));
+      const hidden = e.visibility === 'dm_only';
+      const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}" ${hidden ? 'style="opacity:.65"' : ''}></div>`);
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
       const up = el(`<button class="mini" title="move up">↑</button>`);
       const down = el(`<button class="mini" title="move down">↓</button>`);
       const turn = el(`<button class="mini ${isTurn ? 'primary' : ''}">turn</button>`);
+      const eye = el(`<button class="mini ghost" title="${hidden ? 'show on the projector + player phones' : 'hide from the projector + player phones (GM-only reminder)'}">${hidden ? '👁' : '🙈'}</button>`);
+      eye.onclick = () => conn.action('initiative.set_visibility', { entry_id: e.id, visibility: hidden ? 'visible' : 'dm_only' });
       const out = el(`<button class="mini ghost" title="remove from initiative">✕</button>`);
       up.disabled = i === 0;
       down.disabled = i === entries.length - 1;
@@ -98,7 +101,7 @@
       down.onclick = () => reorder(i, i + 1);
       turn.onclick = () => conn.action('initiative.set_turn', { entry_id: e.id });
       out.onclick = () => conn.action('initiative.remove', { entry_id: e.id });
-      ctl.append(up, down, turn, out);
+      ctl.append(up, down, turn, eye, out);
       row.appendChild(ctl);
       box.appendChild(row);
     }

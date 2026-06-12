@@ -88,7 +88,10 @@ function load() {
   }
   R.assert(Array.isArray(init.entries), 'corrupt DB: runtime.initiative.entries malformed');
   // Drop entries for characters that no longer exist; keep custom entries.
-  state.initiative.entries = init.entries.filter((e) => e.char_id === null || state.characters.has(e.char_id));
+  // Entries saved before per-entry visibility existed migrate to 'visible'.
+  state.initiative.entries = init.entries
+    .filter((e) => e.char_id === null || state.characters.has(e.char_id))
+    .map((e) => ({ ...e, visibility: e.visibility === undefined ? 'visible' : e.visibility }));
   state.initiative.turn_id = state.initiative.entries.some((e) => e.id === init.turn_id) ? init.turn_id : null;
   for (const e of state.initiative.entries) {
     if (e.id.startsWith('custom:')) {
@@ -350,16 +353,25 @@ const ops = {
     const c = getChar(p.char_id);
     const id = `char:${c.id}`;
     R.assert(!state.initiative.entries.some((e) => e.id === id), `${c.name} is already in initiative`);
-    state.initiative.entries.push({ id, char_id: c.id, label: null });
+    state.initiative.entries.push({ id, char_id: c.id, label: null, visibility: 'visible' });
     persistRuntime();
   },
 
   'initiative.add_custom'(p) {
     const label = R.assertNonEmptyString(p.label, 'label');
     const id = `custom:${customEntrySeq++}`;
-    state.initiative.entries.push({ id, char_id: null, label });
+    state.initiative.entries.push({ id, char_id: null, label, visibility: 'visible' });
     persistRuntime();
     return { created_entry_id: id };
+  },
+
+  // Hide an entry from the projector + players (a GM-only reminder, an
+  // unrevealed ambusher…) — same idea as dm_only clocks.
+  'initiative.set_visibility'(p) {
+    const entry = state.initiative.entries.find((e) => e.id === p.entry_id);
+    R.assert(entry, `no initiative entry '${p.entry_id}'`);
+    entry.visibility = R.assertOneOf(p.visibility, ['visible', 'dm_only'], 'visibility');
+    persistRuntime();
   },
 
   // Remove by entry_id (works for both kinds); char_id accepted for characters.
@@ -678,7 +690,11 @@ function snapshotFor(role, charId) {
   const base = {
     game: { reward_every_n_encounters: state.game.reward_every_n_encounters, active_map_id: state.game.active_map_id },
     initiative: {
-      entries: state.initiative.entries.map((e) => ({ ...e })),
+      // dm_only entries (GM reminders, hidden threats) never reach players or
+      // the projector — filtered server-side like dm_only clocks.
+      entries: state.initiative.entries
+        .filter((e) => role === 'dm' || e.visibility === 'visible')
+        .map((e) => ({ ...e })),
       turn_id: state.initiative.turn_id,
     },
     map: activeMapRow,
