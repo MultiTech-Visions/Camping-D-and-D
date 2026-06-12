@@ -653,13 +653,15 @@
     mini.appendChild(vpBox);
 
     // Minimap gestures (token placement lives in the 🕹 mover now):
-    //   tap → jump the camera there · drag → pan, projector follows live
+    //   tap → jump the camera there · drag → pan · pinch → zoom the projector
     //   🔒 freezes the view against accidental taps
     mini.style.touchAction = 'none';
     let grabDX = 0, grabDY = 0, lastLiveSend = 0;
     let dragX = cam.center_x, dragY = cam.center_y;
-    let gestureMode = null; // 'camera' | 'tap'
+    let gestureMode = null; // 'camera' | 'tap' | 'pinch'
     let downClient = null;
+    const pinchPointers = new Map();
+    let pinchStart = null, pinchZoom = cam.zoom;
     const toImage = (ev) => {
       const r = miniImg.getBoundingClientRect();
       return {
@@ -674,6 +676,17 @@
     mini.onpointerdown = (ev) => {
       ev.preventDefault();
       if (mapUI.cameraLocked) return;
+      pinchPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      mini.setPointerCapture(ev.pointerId);
+      if (pinchPointers.size === 2) {
+        // second finger: whatever was happening becomes a zoom gesture
+        const [a, b] = [...pinchPointers.values()];
+        pinchStart = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: cam.zoom };
+        pinchZoom = cam.zoom;
+        gestureMode = 'pinch';
+        mapUI.draggingViewport = true; // reuse the mid-gesture render suppression
+        return;
+      }
       const p = toImage(ev);
       downClient = { x: ev.clientX, y: ev.clientY };
       const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
@@ -688,9 +701,28 @@
         grabDX = 0;
         grabDY = 0;
       }
-      mini.setPointerCapture(ev.pointerId);
     };
     mini.onpointermove = (ev) => {
+      if (pinchPointers.has(ev.pointerId)) {
+        pinchPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      }
+      if (gestureMode === 'pinch') {
+        if (pinchPointers.size === 2 && pinchStart) {
+          const [a, b] = [...pinchPointers.values()];
+          pinchZoom = Math.min(20, Math.max(0.05,
+            pinchStart.zoom * (Math.hypot(a.x - b.x, a.y - b.y) / pinchStart.dist)));
+          if (vp) { // live-resize the projection box under the fingers
+            vpBox.style.width = `${(vp.width / pinchZoom / map.image_w) * 100}%`;
+            vpBox.style.height = `${(vp.height / pinchZoom / map.image_h) * 100}%`;
+          }
+          const now = Date.now();
+          if (now - lastLiveSend > 120) { // projector follows the pinch live
+            lastLiveSend = now;
+            send({ ...cam, center_x: dragX, center_y: dragY, zoom: pinchZoom });
+          }
+        }
+        return;
+      }
       if (gestureMode === 'tap'
           && Math.hypot(ev.clientX - downClient.x, ev.clientY - downClient.y) > 10) {
         gestureMode = 'camera';
@@ -719,7 +751,22 @@
       snap.camera.center_y = dragY;
       send({ ...cam, center_x: dragX, center_y: dragY });
     };
+    const liftPointer = (ev) => {
+      pinchPointers.delete(ev.pointerId);
+      if (gestureMode === 'pinch') {
+        if (pinchPointers.size < 2) {
+          gestureMode = null;
+          pinchStart = null;
+          mapUI.draggingViewport = false;
+          snap.camera.zoom = pinchZoom; // optimistic
+          send({ ...cam, center_x: dragX, center_y: dragY, zoom: pinchZoom });
+        }
+        return true;
+      }
+      return false;
+    };
     mini.onpointerup = (ev) => {
+      if (liftPointer(ev)) return;
       if (gestureMode === 'camera') {
         endDrag();
       } else if (gestureMode === 'tap') {
@@ -732,7 +779,8 @@
       }
       gestureMode = null;
     };
-    mini.onpointercancel = () => {
+    mini.onpointercancel = (ev) => {
+      if (liftPointer(ev)) return;
       if (gestureMode === 'camera') endDrag();
       gestureMode = null;
     };
@@ -741,7 +789,7 @@
       mini.appendChild(el(`<div style="position:absolute;top:6px;left:6px;z-index:3;font-size:1.2rem;text-shadow:0 1px 3px #000">🔒</div>`));
     }
     box.appendChild(mini);
-    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Tap = aim camera · drag = pan · move tokens with 🕹 in the list below.
+    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Tap = aim camera · drag = pan · pinch = zoom · move tokens with 🕹 in the list below.
       Dots = tokens · orange frame = what the <a href="/display" target="_blank">projector</a> shows.</p>`));
 
     const pan = map.cell_size * 2;
