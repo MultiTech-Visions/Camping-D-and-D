@@ -425,11 +425,11 @@
       return box;
     }
     box.appendChild(el(`<p class="muted small center">You're at (${mine.col}, ${mine.row})</p>`));
-    const pad = el(`<div style="display:grid;grid-template-columns:repeat(3,64px);gap:6px;justify-content:center"></div>`);
+    const pad = el(`<div class="dpad"></div>`);
     // arrows match what's on the wall: ▲ = up on the projector, even with the
     // map rotated
     const mv = (sx, sy, txt) => {
-      const b = el(`<button style="font-size:1.3rem">${txt}</button>`);
+      const b = el(`<button>${txt}</button>`);
       b.onclick = () => {
         const rot = snap.camera === null ? 0 : snap.camera.rotation_deg;
         const step = CampfireMap.screenStepToGrid(rot, sx, sy);
@@ -561,130 +561,18 @@
   }
 
   // =========================================================================
-  // Player map viewer: a read-only fullscreen look at the battle map with all
-  // visible tokens — pinch to zoom, drag to pan. Pure scouting: it never
-  // touches the projector camera.
+  // Player map viewer: read-only scouting via the shared pinch-zoom viewer.
   // =========================================================================
-  let viewer = null; // { overlay, holder, tokenLayer, imagePath, scale, tx, ty, apply }
+  let viewer = null;
 
   function openMapViewer() {
     if (viewer || !snap.map) return;
-    const overlay = el(`<div style="position:fixed;inset:0;background:#0c0906;z-index:50;overflow:hidden;touch-action:none"></div>`);
-    const holder = el(`<div style="position:absolute;left:0;top:0;transform-origin:0 0"></div>`);
-    const img = el(`<img draggable="false" style="display:block;width:100%;user-select:none">`);
-    const tokenLayer = el(`<div></div>`);
-    holder.append(img, tokenLayer);
-    overlay.appendChild(holder);
-    const bar = el(`<div style="position:absolute;top:10px;right:10px;display:flex;gap:8px;z-index:2"></div>`);
-    const close = el(`<button>✕ close</button>`);
-    close.onclick = closeMapViewer;
-    bar.appendChild(close);
-    overlay.appendChild(bar);
-    document.body.appendChild(overlay);
-
-    viewer = { overlay, holder, img, tokenLayer, imagePath: null, scale: 1, tx: 0, ty: 0 };
-    viewer.apply = () => {
-      holder.style.transform = `translate(${viewer.tx}px, ${viewer.ty}px) scale(${viewer.scale})`;
-    };
-
-    // --- pinch zoom + drag pan (pointer events; works mouse + touch) --------
-    const pointers = new Map();
-    let pinchStart = null; // {dist, scale, mid:{x,y}, world:{x,y}}
-    const clampView = () => {
-      const vw = overlay.clientWidth, vh = overlay.clientHeight;
-      const cw = holder.offsetWidth * viewer.scale, ch = holder.offsetHeight * viewer.scale;
-      viewer.tx = cw <= vw ? (vw - cw) / 2 : Math.min(0, Math.max(vw - cw, viewer.tx));
-      viewer.ty = ch <= vh ? (vh - ch) / 2 : Math.min(0, Math.max(vh - ch, viewer.ty));
-    };
-    overlay.onpointerdown = (ev) => {
-      overlay.setPointerCapture(ev.pointerId);
-      pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-      if (pointers.size === 2) {
-        const [a, b] = [...pointers.values()];
-        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        pinchStart = {
-          dist: Math.hypot(a.x - b.x, a.y - b.y),
-          scale: viewer.scale,
-          world: { x: (mid.x - viewer.tx) / viewer.scale, y: (mid.y - viewer.ty) / viewer.scale },
-        };
-      }
-    };
-    overlay.onpointermove = (ev) => {
-      const prev = pointers.get(ev.pointerId);
-      if (!prev) return;
-      const cur = { x: ev.clientX, y: ev.clientY };
-      if (pointers.size === 2 && pinchStart) {
-        pointers.set(ev.pointerId, cur);
-        const [a, b] = [...pointers.values()];
-        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        viewer.scale = Math.min(10, Math.max(1, pinchStart.scale * (Math.hypot(a.x - b.x, a.y - b.y) / pinchStart.dist)));
-        viewer.tx = mid.x - pinchStart.world.x * viewer.scale;
-        viewer.ty = mid.y - pinchStart.world.y * viewer.scale;
-      } else if (pointers.size === 1) {
-        viewer.tx += cur.x - prev.x;
-        viewer.ty += cur.y - prev.y;
-        pointers.set(ev.pointerId, cur);
-      }
-      clampView();
-      viewer.apply();
-    };
-    const lift = (ev) => {
-      pointers.delete(ev.pointerId);
-      if (pointers.size < 2) pinchStart = null;
-    };
-    overlay.onpointerup = lift;
-    overlay.onpointercancel = lift;
-    // desktop nicety: mouse wheel zooms around the cursor
-    overlay.onwheel = (ev) => {
-      ev.preventDefault();
-      const factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
-      const world = { x: (ev.clientX - viewer.tx) / viewer.scale, y: (ev.clientY - viewer.ty) / viewer.scale };
-      viewer.scale = Math.min(10, Math.max(1, viewer.scale * factor));
-      viewer.tx = ev.clientX - world.x * viewer.scale;
-      viewer.ty = ev.clientY - world.y * viewer.scale;
-      clampView();
-      viewer.apply();
-    };
-
-    renderMapViewer();
+    viewer = CampfireMapViewer.open({ onClose: () => { viewer = null; } });
+    viewer.update(snap);
   }
 
-  function closeMapViewer() {
-    if (!viewer) return;
-    viewer.overlay.remove();
-    viewer = null;
-  }
-
-  // (re)paint the viewer from the latest snapshot — called on every snapshot
-  // while open, so tokens move live as the table plays
   function renderMapViewer() {
-    if (!viewer) return;
-    if (!snap.map) { closeMapViewer(); return; }
-    const map = snap.map;
-    if (viewer.imagePath !== map.image_path) {
-      viewer.imagePath = map.image_path;
-      viewer.img.src = map.image_path;
-      // size the holder to fill the screen width at scale 1
-      viewer.holder.style.width = `${viewer.overlay.clientWidth}px`;
-      viewer.scale = 1;
-      viewer.tx = 0;
-      viewer.ty = (viewer.overlay.clientHeight - viewer.overlay.clientWidth * (map.image_h / map.image_w)) / 2;
-      viewer.apply();
-    }
-    viewer.tokenLayer.innerHTML = '';
-    for (const t of snap.tokens) {
-      const color = t.kind === 'glow' ? t.glow_color : t.color;
-      const left = ((map.offset_x + t.col * map.cell_size) / map.image_w) * 100;
-      const top = ((map.offset_y + t.row * map.cell_size) / map.image_h) * 100;
-      const wPct = ((t.w * map.cell_size) / map.image_w) * 100;
-      const hPct = ((t.h * map.cell_size) / map.image_h) * 100;
-      const fill = t.art
-        ? `background-image:url('${t.art}');background-size:cover;background-position:center`
-        : `background:${color}`;
-      const tok = el(`<div style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;border-radius:${t.shape === 'square' ? '12%' : '50%'};${fill};opacity:${t.art ? 1 : 0.85};border:1px solid #000"></div>`);
-      viewer.tokenLayer.appendChild(tok);
-      viewer.tokenLayer.appendChild(el(`<div style="position:absolute;left:${left + wPct / 2}%;top:${top + hPct}%;transform:translateX(-50%);color:#fff;font-size:9px;text-shadow:0 1px 2px #000;white-space:nowrap">${esc(t.label)}</div>`));
-    }
+    if (viewer) viewer.update(snap); // live token updates while open
   }
 
   // =========================================================================
