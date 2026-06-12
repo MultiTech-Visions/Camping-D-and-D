@@ -313,9 +313,15 @@
     }
     box.appendChild(el(`<p class="muted small center">You're at (${mine.col}, ${mine.row})</p>`));
     const pad = el(`<div style="display:grid;grid-template-columns:repeat(3,64px);gap:6px;justify-content:center"></div>`);
-    const mv = (dc, dr, txt) => {
+    // arrows match what's on the wall: ▲ = up on the projector, even with the
+    // map rotated
+    const mv = (sx, sy, txt) => {
       const b = el(`<button style="font-size:1.3rem">${txt}</button>`);
-      b.onclick = () => conn.action('token.move', { token_id: mine.id, col: mine.col + dc, row: mine.row + dr });
+      b.onclick = () => {
+        const rot = snap.camera === null ? 0 : snap.camera.rotation_deg;
+        const step = CampfireMap.screenStepToGrid(rot, sx, sy);
+        conn.action('token.move', { token_id: mine.id, col: mine.col + step.dc, row: mine.row + step.dr });
+      };
       return b;
     };
     pad.append(el(`<span></span>`), mv(0, -1, '▲'), el(`<span></span>`),
