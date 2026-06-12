@@ -351,6 +351,7 @@
     cellsDown: 5,
     selectedToken: null,
     draggingViewport: false, // suppress re-renders while dragging the minimap box
+    cameraLocked: false,     // 🔒 freeze the view against accidental taps
     recoloring: null,        // token id whose color picker is open
     resizing: null,          // token id whose size editor is open
     newLabel: '',            // create-form state that must survive re-renders
@@ -602,6 +603,10 @@
     box.appendChild(el(`<h3 style="margin:4px 0">🎥 Camera</h3>`));
 
     const send = (next) => {
+      if (mapUI.cameraLocked) {
+        conn.toast('🔒 camera is locked — unlock to move the view', false);
+        return;
+      }
       conn.action('camera.update', {
         center_x: Math.min(Math.max(next.center_x, 0), map.image_w),
         center_y: Math.min(Math.max(next.center_y, 0), map.image_h),
@@ -645,10 +650,9 @@
     }
     mini.appendChild(vpBox);
 
-    // Minimap gestures:
-    //   tap (token selected)  → teleport that token to the tapped cell
-    //   tap (nothing selected) → jump the camera there
-    //   drag the box / drag anywhere → pan the camera, projector follows live
+    // Minimap gestures (token placement lives in the 🕹 mover now):
+    //   tap → jump the camera there · drag → pan, projector follows live
+    //   🔒 freezes the view against accidental taps
     mini.style.touchAction = 'none';
     let grabDX = 0, grabDY = 0, lastLiveSend = 0;
     let dragX = cam.center_x, dragY = cam.center_y;
@@ -661,27 +665,18 @@
         y: Math.min(Math.max(((ev.clientY - r.top) / r.height) * map.image_h, 0), map.image_h),
       };
     };
-    const toCell = (p) => {
-      const g = CampfireMap.imageToGrid(map, p.x, p.y);
-      return CampfireMap.clampToGrid(map, g.col, g.row);
-    };
     const placeBox = (x, y) => {
       vpBox.style.left = `${(x / map.image_w) * 100}%`;
       vpBox.style.top = `${(y / map.image_h) * 100}%`;
     };
-    // While a token is selected, the minimap belongs to TOKEN PLACEMENT:
-    // camera drag and the viewport box are suspended so a tap (or
-    // drag-and-release) always places the token. Deselecting the token in
-    // the list hands the minimap back to the camera.
-    const tokenPlacementMode = () => snap.tokens.some((t) => t.id === mapUI.selectedToken);
     mini.onpointerdown = (ev) => {
       ev.preventDefault();
+      if (mapUI.cameraLocked) return;
       const p = toImage(ev);
       downClient = { x: ev.clientX, y: ev.clientY };
       const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
       const halfH = vp ? vp.height / cam.zoom / 2 : map.image_h * 0.04;
-      if (!tokenPlacementMode()
-          && Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
+      if (Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
         gestureMode = 'camera'; // grabbed the box — keep the grip point
         grabDX = dragX - p.x;
         grabDY = dragY - p.y;
@@ -696,7 +691,6 @@
     mini.onpointermove = (ev) => {
       if (gestureMode === 'tap'
           && Math.hypot(ev.clientX - downClient.x, ev.clientY - downClient.y) > 10) {
-        if (tokenPlacementMode()) return; // stay in tap mode: place where the finger releases
         gestureMode = 'camera';
         mapUI.draggingViewport = true;
         const p = toImage(ev);
@@ -728,23 +722,11 @@
         endDrag();
       } else if (gestureMode === 'tap') {
         const p = toImage(ev);
-        const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
-        if (sel) {
-          // teleport the selected token; keep its whole footprint on the map
-          const dims = CampfireMap.gridDims(map);
-          const cell = toCell(p);
-          conn.action('token.move', {
-            token_id: sel.id,
-            col: Math.min(cell.col, dims.cols - sel.w),
-            row: Math.min(cell.row, dims.rows - sel.h),
-          });
-        } else {
-          dragX = p.x;
-          dragY = p.y;
-          snap.camera.center_x = p.x;
-          snap.camera.center_y = p.y;
-          send({ ...cam, center_x: p.x, center_y: p.y });
-        }
+        dragX = p.x;
+        dragY = p.y;
+        snap.camera.center_x = p.x;
+        snap.camera.center_y = p.y;
+        send({ ...cam, center_x: p.x, center_y: p.y });
       }
       gestureMode = null;
     };
@@ -752,22 +734,25 @@
       if (gestureMode === 'camera') endDrag();
       gestureMode = null;
     };
-    if (tokenPlacementMode()) vpBox.style.opacity = '0.35'; // camera control is on hold
+    if (mapUI.cameraLocked) {
+      mini.style.cursor = 'default';
+      mini.appendChild(el(`<div style="position:absolute;top:6px;left:6px;z-index:3;font-size:1.2rem;text-shadow:0 1px 3px #000">🔒</div>`));
+    }
     box.appendChild(mini);
-    const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
-    box.appendChild(el(`<p class="small" style="margin:4px 0;${sel ? 'color:var(--gold)' : ''}">${sel
-      ? `♟ Tap the minimap to move <strong>${esc(sel.label)}</strong> there (arrows fine-tune).`
-      : 'Tap = aim camera · drag = pan. Select a token below to place it by tapping.'}</p>`));
-    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
-      The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
+    box.appendChild(el(`<p class="muted small" style="margin:4px 0">Tap = aim camera · drag = pan · move tokens with 🕹 in the list below.
+      Dots = tokens · orange frame = what the <a href="/display" target="_blank">projector</a> shows.</p>`));
 
     const pan = map.cell_size * 2;
     const ctl = el(`<div class="btn-row"></div>`);
     const mk = (txt, fn, title) => {
       const b = el(`<button class="mini" title="${title}">${txt}</button>`);
+      b.disabled = mapUI.cameraLocked;
       b.onclick = fn;
       return b;
     };
+    const lock = el(`<button class="mini ${mapUI.cameraLocked ? 'primary' : 'ghost'}" title="${mapUI.cameraLocked ? 'unlock the camera' : 'lock the camera so stray taps can’t move it'}">${mapUI.cameraLocked ? '🔒' : '🔓'}</button>`);
+    lock.onclick = () => { mapUI.cameraLocked = !mapUI.cameraLocked; render(); };
+    ctl.appendChild(lock);
     // Nudges are SCREEN-relative: with the map rotated 90°, "up" means up on
     // the projector, not up in image pixels — so rotate the pan vector by the
     // inverse of the camera rotation before applying it in image space.
@@ -818,6 +803,7 @@
       for (const b of snap.camera_bookmarks) {
         const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
         const go = el(`<button class="mini" style="flex:1;text-align:left">🎥 ${esc(b.name)} <span class="muted small">(${Math.round(b.zoom * 100)}%${b.rotation_deg ? ` · ${b.rotation_deg}°` : ''})</span></button>`);
+        go.disabled = mapUI.cameraLocked;
         go.onclick = () => send(b);
         const overwrite = el(`<button class="mini ghost" title="re-save this view as the current camera">update</button>`);
         overwrite.onclick = () => conn.action('camera.save_bookmark', { name: b.name });
@@ -1028,7 +1014,7 @@
         box.appendChild(sizeEdit);
       }
     }
-    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — add one above, then select it and tap the minimap to place it.</p>`));
+    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — add one above, then open 🕹 to place it.</p>`));
     return box;
   }
 
