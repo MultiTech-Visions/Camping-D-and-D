@@ -16,7 +16,6 @@
 
 (function () {
   const turnEl = document.getElementById('d-turn');
-  const orderEl = document.getElementById('d-order');
   const clocksEl = document.getElementById('d-clocks');
   const rosterEl = document.getElementById('d-roster');
   const mapRoot = document.getElementById('map-root');
@@ -224,34 +223,22 @@
         turnEl.textContent = `▶ ${turnEntry.label}`;
       }
 
-      // the full turn order — characters AND custom entries (Ogre, hazards…);
-      // the server already filtered out the GM's dm_only reminders
-      orderEl.innerHTML = '';
-      for (const e of snap.initiative.entries) {
-        const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
-        const name = c ? c.name : e.label;
-        const isTurn = snap.initiative.turn_id === e.id;
-        orderEl.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${c ? '' : '👹 '}${esc(name)}</span>`));
-      }
-
       // visible clocks
       clocksEl.innerHTML = '';
       for (const clock of snap.clocks) {
         clocksEl.appendChild(CampfireDice.renderClock(clock, { size: mapMode ? 120 : 170 }));
       }
 
-      // roster, initiative order first
-      rosterEl.innerHTML = '<h2 style="margin-top:0">The Party</h2>';
-      const order = snap.initiative.entries.map((e) => e.char_id).filter((id) => id !== null);
-      const sorted = [...snap.characters].sort((a, b) => {
-        const ai = order.indexOf(a.id), bi = order.indexOf(b.id);
-        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-      });
-      const turnCharId = turnEntry && turnEntry.char_id !== null ? turnEntry.char_id : null;
-      for (const c of sorted) {
+      // ONE sidebar = the initiative stack: character cards and plain gray
+      // boxes for custom entries (Ogre, hazards…), in turn order, then any
+      // characters who aren't in the order yet.
+      const inInitiative = snap.initiative.entries.length > 0;
+      rosterEl.innerHTML = `<h2 style="margin-top:0">${inInitiative ? 'Turn Order' : 'The Party'}</h2>`;
+
+      function charCard(c, isTurn) {
         const dead = c.conditions.some((x) => x.kind === 'dead');
-        const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${c.id === turnCharId ? 'turn-active' : ''}"></div>`);
-        card.appendChild(el(`<strong>${c.id === turnCharId ? '▶ ' : ''}${esc(c.name)}</strong>`));
+        const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
+        card.appendChild(el(`<strong>${isTurn ? '▶ ' : ''}${esc(c.name)}</strong>`));
         if (c.system === 'campfire') {
           const dice = el(`<div></div>`);
           const total = { green: 0, yellow: 0, blue: c.granted_blue };
@@ -272,7 +259,29 @@
         if (c.conditions.length > 0) {
           card.appendChild(el(`<div class="small muted">${c.conditions.map((x) => esc(x.kind)).join(' · ')}</div>`));
         }
-        rosterEl.appendChild(card);
+        return card;
+      }
+
+      // simple gray box for non-character entries: name only, same turn highlight
+      function customCard(e, isTurn) {
+        return el(`<div class="card ${isTurn ? 'turn-active' : ''}" style="background:#33343a">
+          <strong style="color:#fff">${isTurn ? '▶ ' : ''}${esc(e.label)}</strong></div>`);
+      }
+
+      const seenCharIds = new Set();
+      for (const e of snap.initiative.entries) {
+        const isTurn = snap.initiative.turn_id === e.id;
+        if (e.char_id !== null) {
+          const c = snap.characters.find((x) => x.id === e.char_id);
+          if (!c) continue;
+          seenCharIds.add(c.id);
+          rosterEl.appendChild(charCard(c, isTurn));
+        } else {
+          rosterEl.appendChild(customCard(e, isTurn));
+        }
+      }
+      for (const c of snap.characters) {
+        if (!seenCharIds.has(c.id)) rosterEl.appendChild(charCard(c, false));
       }
     },
   });
