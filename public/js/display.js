@@ -125,10 +125,14 @@
     pixi.tokenLayer.removeChildren();
     pixi.glows = [];
     const turnEntry = snap.initiative.entries.find((e) => e.id === snap.initiative.turn_id);
-    const r = map.cell_size * 0.4;
+    const camTheta = (snap.camera.rotation_deg * Math.PI) / 180;
 
     for (const tok of snap.tokens) {
-      const { x, y } = CampfireMap.cellCenter(map, tok.col, tok.row);
+      // footprint: (col,row) is the top-left cell; w×h cells; render from its center
+      const fw = tok.w * map.cell_size;
+      const fh = tok.h * map.cell_size;
+      const x = map.offset_x + tok.col * map.cell_size + fw / 2;
+      const y = map.offset_y + tok.row * map.cell_size + fh / 2;
 
       if (tok.kind === 'glow') {
         const g = new PIXI.Graphics();
@@ -158,8 +162,15 @@
       } else {
         disc.lineStyle(2, 0x000000, 0.8);
       }
-      disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
-      disc.drawCircle(0, 0, r);
+      if (tok.shape === 'square') {
+        // squares fill their cells (terrain): edge-to-edge, slightly translucent
+        disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.8);
+        disc.drawRoundedRect(-fw / 2, -fh / 2, fw, fh, map.cell_size * 0.12);
+      } else {
+        // circles sit inside the footprint (creatures); 1x1 stays the classic disc
+        disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
+        disc.drawEllipse(0, 0, fw * 0.4, fh * 0.4);
+      }
       disc.endFill();
       holder.addChild(disc);
 
@@ -172,8 +183,19 @@
         align: 'center',
       });
       label.anchor.set(0.5, 0);
-      label.position.set(0, r * 1.1);
-      holder.addChild(label);
+      // Labels stay readable whatever the camera rotation: a wrapper counter-
+      // rotates against the world so the text is always upright and hangs
+      // below the token IN SCREEN TERMS. The hang distance is the footprint's
+      // extent along the screen-down axis at this rotation, so the text
+      // clears the shape's edge instead of overlapping it.
+      const ext = tok.shape === 'square'
+        ? (fw / 2) * Math.abs(Math.sin(camTheta)) + (fh / 2) * Math.abs(Math.cos(camTheta))
+        : Math.sqrt((fw * 0.4 * Math.sin(camTheta)) ** 2 + (fh * 0.4 * Math.cos(camTheta)) ** 2);
+      const labelWrap = new PIXI.Container();
+      labelWrap.rotation = -camTheta;
+      label.position.set(0, ext + map.cell_size * 0.05);
+      labelWrap.addChild(label);
+      holder.addChild(labelWrap);
 
       if (dead) holder.alpha = 0.55;
       pixi.tokenLayer.addChild(holder);

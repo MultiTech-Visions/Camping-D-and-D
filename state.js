@@ -52,16 +52,35 @@ function load() {
   R.assert(runtime && runtime.perChar, 'corrupt DB: runtime row malformed');
 
   state.characters.clear();
+  const migratedSheets = [];
   for (const row of stmts.allCharacters.all()) {
     const rt = runtime.perChar[row.id];
+    let sheet = null;
+    if (row.system === 'dnd5e') {
+      sheet = JSON.parse(row.dnd_sheet);
+      // One-time migration for sheets created before skills existed.
+      let migrated = false;
+      if (sheet.skills === undefined) {
+        sheet.skills = {};
+        for (const s of config.DND.SKILLS) sheet.skills[s.key] = { prof: 0, misc: 0 };
+        migrated = true;
+      }
+      if (sheet.custom_skills === undefined) {
+        sheet.custom_skills = [];
+        migrated = true;
+      }
+      R.validateDndSheet(sheet);
+      if (migrated) migratedSheets.push(row.id);
+    }
     state.characters.set(row.id, {
       ...row,
-      dnd_sheet: row.system === 'dnd5e' ? R.validateDndSheet(JSON.parse(row.dnd_sheet)) : null,
+      dnd_sheet: sheet,
       drain: rt ? rt.drain : zeroDrain(),
       granted_blue: rt ? rt.granted_blue : 0,
       conditions: [],
     });
   }
+  for (const id of migratedSheets) persistCharacter(state.characters.get(id));
   for (const c of stmts.allConditions.all()) {
     const char = state.characters.get(c.char_id);
     R.assert(char, `corrupt DB: condition ${c.id} references missing character ${c.char_id}`);
@@ -166,10 +185,13 @@ function gridDims(map) {
   };
 }
 
-function assertOnGrid(col, row, map) {
+// A token occupies a w×h footprint of cells; (col,row) is its top-left cell.
+function assertFootprintOnGrid(col, row, w, h, map) {
   const { cols, rows } = gridDims(map);
-  R.assertIntIn(col, 0, cols - 1, 'col');
-  R.assertIntIn(row, 0, rows - 1, 'row');
+  R.assertIntIn(w, 1, Math.min(config.TOKEN_MAX_SIZE, cols), 'w');
+  R.assertIntIn(h, 1, Math.min(config.TOKEN_MAX_SIZE, rows), 'h');
+  R.assertIntIn(col, 0, cols - w, 'col');
+  R.assertIntIn(row, 0, rows - h, 'row');
 }
 
 function assertFiniteNumber(value, name) {
@@ -488,11 +510,13 @@ const ops = {
     if (state.game.active_map_id === map.id) {
       const dims = gridDims(map);
       for (const t of state.tokens.values()) {
-        const col = Math.min(Math.max(t.col, 0), dims.cols - 1);
-        const row = Math.min(Math.max(t.row, 0), dims.rows - 1);
-        if (col !== t.col || row !== t.row) {
-          t.col = col;
-          t.row = row;
+        // shrink footprints that no longer fit, then pull positions onto the grid
+        const w = Math.min(t.w, dims.cols);
+        const h = Math.min(t.h, dims.rows);
+        const col = Math.min(Math.max(t.col, 0), dims.cols - w);
+        const row = Math.min(Math.max(t.row, 0), dims.rows - h);
+        if (col !== t.col || row !== t.row || w !== t.w || h !== t.h) {
+          Object.assign(t, { col, row, w, h });
           stmts.updateToken.run(t);
         }
       }
@@ -548,11 +572,14 @@ const ops = {
       kind,
       char_id: null,
       col: p.col, row: p.row,
-      // creation default by kind — overridable per token (assertHexColor on either path)
+      // creation defaults by kind — overridable per token
+      w: p.w === undefined ? 1 : p.w,
+      h: p.h === undefined ? 1 : p.h,
+      shape: p.shape === undefined ? config.TOKEN_DEFAULT_SHAPES[kind] : R.assertOneOf(p.shape, config.TOKEN_SHAPES, 'shape'),
       color: p.color === undefined ? config.TOKEN_DEFAULT_COLORS[kind] : assertHexColor(p.color, 'color'),
       glow_color: null, glow_radius: null, glow_pulse: null,
     };
-    assertOnGrid(p.col, p.row, map);
+    assertFootprintOnGrid(row.col, row.row, row.w, row.h, map);
     if (kind === 'pc') {
       const c = getChar(p.char_id);
       R.assert(![...state.tokens.values()].some((t) => t.char_id === c.id),
@@ -581,9 +608,25 @@ const ops = {
 
   'token.move'(p) {
     const t = getToken(p.token_id);
-    assertOnGrid(p.col, p.row, activeMap());
+    assertFootprintOnGrid(p.col, p.row, t.w, t.h, activeMap());
     t.col = p.col;
     t.row = p.row;
+    stmts.updateToken.run(t);
+  },
+
+  // Resize / reshape a token. If growing it would push the footprint past the
+  // map edge, the position is pulled back to fit — deliberate, not silent.
+  'token.set_size'(p) {
+    const t = getToken(p.token_id);
+    const map = activeMap();
+    const { cols, rows } = gridDims(map);
+    const w = R.assertIntIn(p.w, 1, Math.min(config.TOKEN_MAX_SIZE, cols), 'w');
+    const h = R.assertIntIn(p.h, 1, Math.min(config.TOKEN_MAX_SIZE, rows), 'h');
+    t.shape = R.assertOneOf(p.shape, config.TOKEN_SHAPES, 'shape');
+    t.w = w;
+    t.h = h;
+    t.col = Math.min(t.col, cols - w);
+    t.row = Math.min(t.row, rows - h);
     stmts.updateToken.run(t);
   },
 
@@ -710,6 +753,8 @@ function snapshotFor(role, charId) {
       CLOCK_SEGMENT_CHOICES: config.CLOCK_SEGMENT_CHOICES,
       TOKEN_KINDS: config.TOKEN_KINDS,
       TOKEN_DEFAULT_COLORS: config.TOKEN_DEFAULT_COLORS,
+      TOKEN_SHAPES: config.TOKEN_SHAPES,
+      TOKEN_DEFAULT_SHAPES: config.TOKEN_DEFAULT_SHAPES,
       DND: config.DND,
     },
   };

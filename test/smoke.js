@@ -58,6 +58,11 @@ check('creation validation: 4 points, max 2 each, fail loud', () => {
 // --- state ops -------------------------------------------------------------
 load();
 
+const config = require('../config');
+function defaultSkills() {
+  return Object.fromEntries(config.DND.SKILLS.map((s) => [s.key, { prof: 0, misc: 0 }]));
+}
+
 let heroId, wizardId;
 check('character.create (campfire)', () => {
   heroId = ops['character.create']({
@@ -78,10 +83,32 @@ check('character.create (dnd5e)', () => {
       ac: 12, hp_max: 17, hp: 17, temp_hp: 0, speed: 30, prof_bonus: 2,
       inspiration: false, death_successes: 0, death_failures: 0,
       spell_slots: Array.from({ length: 9 }, (_, i) => ({ max: i === 0 ? 4 : i === 1 ? 2 : 0, used: 0 })),
+      skills: { ...defaultSkills(), arcana: { prof: 2, misc: 0 }, perception: { prof: 1, misc: 1 } },
+      custom_skills: [{ name: "Alchemist's supplies", bonus: 5 }],
     },
   }).created_char_id;
   assert.ok(Number.isInteger(wizardId));
   throws(() => ops['character.create']({ system: 'dnd5e', name: 'Bad', concept: 'x', sheet: { class_name: 'Rogue' } }));
+});
+
+check('dnd skills validated: prof 0..2, known keys only, custom list sane', () => {
+  const c = state.characters.get(wizardId);
+  assert.strictEqual(c.dnd_sheet.skills.arcana.prof, 2);
+  const next = JSON.parse(JSON.stringify(c.dnd_sheet));
+  next.skills.stealth.prof = 3;
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next }));
+  next.skills.stealth.prof = 1;
+  next.skills.lockpicking = { prof: 1, misc: 0 }; // unknown skill key
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next }));
+  delete next.skills.lockpicking;
+  next.custom_skills.push({ name: '  ', bonus: 2 }); // blank name
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next }));
+  next.custom_skills[1] = { name: 'Disguise kit', bonus: 99 }; // bonus out of range
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next }));
+  next.custom_skills[1] = { name: 'Disguise kit', bonus: 3 };
+  ops['character.update_dnd']({ char_id: wizardId, sheet: next });
+  assert.strictEqual(state.characters.get(wizardId).dnd_sheet.skills.stealth.prof, 1);
+  assert.strictEqual(state.characters.get(wizardId).dnd_sheet.custom_skills.length, 2);
 });
 
 check('drain + absorb + yellows-strip-via-rank', () => {
@@ -301,6 +328,24 @@ check('token colors + saved palette', () => {
   throws(() => ops['palette.delete_color']({ color: '#112233' })); // already gone
   ops['token.delete']({ token_id: ogre });
   ops['token.delete']({ token_id: wisp });
+});
+
+check('token size + shape: footprints, bounds, resize clamping', () => {
+  // grid is 19x15; defaults: 1x1, terrain=square, creatures=circle
+  const rock = ops['token.create']({ label: 'Boulder', kind: 'terrain', col: 0, row: 0 }).created_token_id;
+  assert.strictEqual(state.tokens.get(rock).shape, 'square');
+  const wall = ops['token.create']({ label: 'Wall', kind: 'terrain', col: 16, row: 10, w: 3, h: 5, shape: 'square' }).created_token_id;
+  assert.strictEqual(state.tokens.get(wall).w, 3);
+  throws(() => ops['token.create']({ label: 'too wide', kind: 'terrain', col: 17, row: 0, w: 3, h: 1 })); // footprint off the edge
+  throws(() => ops['token.move']({ token_id: wall, col: 17, row: 10 })); // 3-wide can't start at col 17
+  ops['token.move']({ token_id: wall, col: 16, row: 0 });
+  // growing pulls the position back to fit instead of falling off the map
+  ops['token.set_size']({ token_id: wall, w: 5, h: 5, shape: 'square' });
+  assert.strictEqual(state.tokens.get(wall).col, 14);
+  throws(() => ops['token.set_size']({ token_id: wall, w: 0, h: 5, shape: 'square' }));
+  throws(() => ops['token.set_size']({ token_id: wall, w: 2, h: 2, shape: 'blob' }));
+  ops['token.delete']({ token_id: rock });
+  ops['token.delete']({ token_id: wall });
 });
 
 check('display viewport report (for the GM minimap projection box)', () => {

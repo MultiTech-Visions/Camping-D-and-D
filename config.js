@@ -43,6 +43,9 @@ module.exports = {
   // --- Battle map (Phase 3) ---
   TOKEN_KINDS: ['pc', 'monster', 'glow', 'terrain'],
   TOKEN_DEFAULT_COLORS: { pc: '#3e8ed0', monster: '#c43c34', terrain: '#8a8a8a', glow: '#ff8c2e' },
+  TOKEN_SHAPES: ['circle', 'square'],
+  TOKEN_DEFAULT_SHAPES: { pc: 'circle', monster: 'circle', terrain: 'square', glow: 'circle' },
+  TOKEN_MAX_SIZE: 50, // max footprint edge in cells
   CUSTOM_COLOR_LIMIT: 24,
   CAMERA_ZOOM_MIN: 0.05,
   CAMERA_ZOOM_MAX: 20,
@@ -59,5 +62,28 @@ module.exports = {
     AC_MIN: 0,
     AC_MAX: 40,
     SPELL_LEVELS: 9,
+    // the standard 18 skills; prof level per skill: 0 none, 1 proficient, 2 expertise
+    SKILLS: [
+      { key: 'acrobatics', label: 'Acrobatics', ability: 'dex' },
+      { key: 'animal_handling', label: 'Animal Handling', ability: 'wis' },
+      { key: 'arcana', label: 'Arcana', ability: 'int' },
+      { key: 'athletics', label: 'Athletics', ability: 'str' },
+      { key: 'deception', label: 'Deception', ability: 'cha' },
+      { key: 'history', label: 'History', ability: 'int' },
+      { key: 'insight', label: 'Insight', ability: 'wis' },
+      { key: 'intimidation', label: 'Intimidation', ability: 'cha' },
+      { key: 'investigation', label: 'Investigation', ability: 'int' },
+      { key: 'medicine', label: 'Medicine', ability: 'wis' },
+      { key: 'nature', label: 'Nature', ability: 'int' },
+      { key: 'perception', label: 'Perception', ability: 'wis' },
+      { key: 'performance', label: 'Performance', ability: 'cha' },
+      { key: 'persuasion', label: 'Persuasion', ability: 'cha' },
+      { key: 'religion', label: 'Religion', ability: 'int' },
+      { key: 'sleight_of_hand', label: 'Sleight of Hand', ability: 'dex' },
+      { key: 'stealth', label: 'Stealth', ability: 'dex' },
+      { key: 'survival', label: 'Survival', ability: 'wis' },
+    ],
+    SKILL_MISC_MIN: -20,
+    SKILL_MISC_MAX: 20,
   },
 };

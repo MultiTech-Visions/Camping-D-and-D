@@ -100,6 +100,26 @@ function validateDndSheet(sheet) {
     assertIntIn(slot.max, 0, 20, `spell slot level ${i + 1} max`);
     assertIntIn(slot.used, 0, slot.max, `spell slot level ${i + 1} used`);
   }
+  // skills: exactly the standard set, each {prof: 0|1|2, misc: flat extra}
+  assert(sheet.skills !== null && typeof sheet.skills === 'object' && !Array.isArray(sheet.skills),
+    'skills must be an object');
+  const knownSkills = new Set(d.SKILLS.map((s) => s.key));
+  for (const s of d.SKILLS) {
+    const entry = sheet.skills[s.key];
+    assert(entry !== null && typeof entry === 'object', `skill '${s.key}' is missing`);
+    assertIntIn(entry.prof, 0, 2, `skill ${s.key} proficiency (0 none, 1 proficient, 2 expertise)`);
+    assertIntIn(entry.misc, d.SKILL_MISC_MIN, d.SKILL_MISC_MAX, `skill ${s.key} misc bonus`);
+  }
+  for (const key of Object.keys(sheet.skills)) {
+    assert(knownSkills.has(key), `unknown skill '${key}' (use custom_skills for tools etc.)`);
+  }
+  // custom skills/proficiencies (tools, instruments, languages…): freeform name + flat bonus
+  assert(Array.isArray(sheet.custom_skills), 'custom_skills must be an array');
+  for (const cs of sheet.custom_skills) {
+    assert(cs !== null && typeof cs === 'object', 'each custom skill must be an object');
+    assertNonEmptyString(cs.name, 'custom skill name');
+    assertIntIn(cs.bonus, d.SKILL_MISC_MIN, d.SKILL_MISC_MAX, `custom skill '${cs.name}' bonus`);
+  }
   return sheet;
 }
 
