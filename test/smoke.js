@@ -85,6 +85,10 @@ check('character.create (dnd5e)', () => {
       spell_slots: Array.from({ length: 9 }, (_, i) => ({ max: i === 0 ? 4 : i === 1 ? 2 : 0, used: 0 })),
       skills: { ...defaultSkills(), arcana: { prof: 2, misc: 0 }, perception: { prof: 1, misc: 1 } },
       custom_skills: [{ name: "Alchemist's supplies", bonus: 5 }],
+      spells: [
+        { name: 'Fire Bolt', level: 0, prepared: true, concentration: false, note: '1d10 fire, 120ft' },
+        { name: 'Haste', level: 3, prepared: true, concentration: true, note: '' },
+      ],
     },
   }).created_char_id;
   assert.ok(Number.isInteger(wizardId));
@@ -109,6 +113,23 @@ check('dnd skills validated: prof 0..2, known keys only, custom list sane', () =
   ops['character.update_dnd']({ char_id: wizardId, sheet: next });
   assert.strictEqual(state.characters.get(wizardId).dnd_sheet.skills.stealth.prof, 1);
   assert.strictEqual(state.characters.get(wizardId).dnd_sheet.custom_skills.length, 2);
+});
+
+check('dnd spellbook validated: name+level required, bools, short notes', () => {
+  const c = state.characters.get(wizardId);
+  assert.strictEqual(c.dnd_sheet.spells.length, 2);
+  const next = JSON.parse(JSON.stringify(c.dnd_sheet));
+  next.spells.push({ name: 'Shield', level: 1, prepared: true, concentration: false, note: '+5 AC until next turn' });
+  ops['character.update_dnd']({ char_id: wizardId, sheet: next });
+  assert.strictEqual(state.characters.get(wizardId).dnd_sheet.spells.length, 3);
+  next.spells.push({ name: '', level: 1, prepared: true, concentration: false, note: '' });
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next })); // blank name
+  next.spells[3] = { name: 'Wish Plus', level: 10, prepared: true, concentration: false, note: '' };
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next })); // level > 9
+  next.spells[3] = { name: 'Vague', level: 1, prepared: 'yes', concentration: false, note: '' };
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next })); // non-bool prepared
+  next.spells[3] = { name: 'Rambling', level: 1, prepared: true, concentration: false, note: 'x'.repeat(201) };
+  throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next })); // novel-length note
 });
 
 check('drain + absorb + yellows-strip-via-rank', () => {
