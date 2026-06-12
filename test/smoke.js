@@ -303,6 +303,24 @@ check('token colors + saved palette', () => {
   ops['token.delete']({ token_id: wisp });
 });
 
+check('token size + shape: footprints, bounds, resize clamping', () => {
+  // grid is 19x15; defaults: 1x1, terrain=square, creatures=circle
+  const rock = ops['token.create']({ label: 'Boulder', kind: 'terrain', col: 0, row: 0 }).created_token_id;
+  assert.strictEqual(state.tokens.get(rock).shape, 'square');
+  const wall = ops['token.create']({ label: 'Wall', kind: 'terrain', col: 16, row: 10, w: 3, h: 5, shape: 'square' }).created_token_id;
+  assert.strictEqual(state.tokens.get(wall).w, 3);
+  throws(() => ops['token.create']({ label: 'too wide', kind: 'terrain', col: 17, row: 0, w: 3, h: 1 })); // footprint off the edge
+  throws(() => ops['token.move']({ token_id: wall, col: 17, row: 10 })); // 3-wide can't start at col 17
+  ops['token.move']({ token_id: wall, col: 16, row: 0 });
+  // growing pulls the position back to fit instead of falling off the map
+  ops['token.set_size']({ token_id: wall, w: 5, h: 5, shape: 'square' });
+  assert.strictEqual(state.tokens.get(wall).col, 14);
+  throws(() => ops['token.set_size']({ token_id: wall, w: 0, h: 5, shape: 'square' }));
+  throws(() => ops['token.set_size']({ token_id: wall, w: 2, h: 2, shape: 'blob' }));
+  ops['token.delete']({ token_id: rock });
+  ops['token.delete']({ token_id: wall });
+});
+
 check('display viewport report (for the GM minimap projection box)', () => {
   ops['display.report_viewport']({ width: 1920, height: 1080 });
   assert.deepStrictEqual(state.display_viewport, { width: 1920, height: 1080 });

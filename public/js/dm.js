@@ -204,9 +204,13 @@
     draggingViewport: false, // suppress re-renders while dragging the minimap box
     pendingSpawn: null,      // {col,row} from a minimap long-press, awaiting the form
     recoloring: null,        // token id whose color picker is open
+    resizing: null,          // token id whose size editor is open
     newLabel: '',            // create-form state that must survive re-renders
     newKind: 'monster',
     newColor: '#c43c34',
+    newShape: 'circle',
+    newW: 1,
+    newH: 1,
   };
 
   // Broad starter colors; the GM's own colors live in snap.custom_colors.
@@ -465,10 +469,14 @@
     mini.appendChild(miniImg);
 
     for (const t of snap.tokens) {
-      const c = CampfireMap.cellCenter(map, t.col, t.row);
       const selected = mapUI.selectedToken === t.id;
       const dotColor = t.kind === 'glow' ? t.glow_color : t.color;
-      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:${selected ? 14 : 10}px;height:${selected ? 14 : 10}px;margin:${selected ? -7 : -5}px;border-radius:50%;background:${dotColor};border:2px solid ${selected ? 'var(--ember)' : '#000'};${selected ? 'box-shadow:0 0 8px var(--ember);' : ''}pointer-events:none;z-index:2"></div>`));
+      // draw the actual footprint (w×h cells), shape-matched; tiny ones keep a visible minimum
+      const left = ((map.offset_x + t.col * map.cell_size) / map.image_w) * 100;
+      const top = ((map.offset_y + t.row * map.cell_size) / map.image_h) * 100;
+      const wPct = ((t.w * map.cell_size) / map.image_w) * 100;
+      const hPct = ((t.h * map.cell_size) / map.image_h) * 100;
+      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;min-width:8px;min-height:8px;border-radius:${t.shape === 'square' ? '15%' : '50%'};background:${dotColor};border:2px solid ${selected ? 'var(--ember)' : '#000'};${selected ? 'box-shadow:0 0 8px var(--ember);' : ''}opacity:.92;pointer-events:none;z-index:2"></div>`));
     }
 
     // What the projector is actually showing: the real viewport rectangle,
@@ -585,8 +593,14 @@
         const p = toImage(ev);
         const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
         if (sel) {
-          const cell = toCell(p); // teleport the selected token, arrows fine-tune
-          conn.action('token.move', { token_id: sel.id, col: cell.col, row: cell.row });
+          // teleport the selected token; keep its whole footprint on the map
+          const dims = CampfireMap.gridDims(map);
+          const cell = toCell(p);
+          conn.action('token.move', {
+            token_id: sel.id,
+            col: Math.min(cell.col, dims.cols - sel.w),
+            row: Math.min(cell.row, dims.rows - sel.h),
+          });
         } else {
           dragX = p.x;
           dragY = p.y;
@@ -710,6 +724,7 @@
     kind.onchange = () => {
       mapUI.newKind = kind.value;
       mapUI.newColor = snap.config.TOKEN_DEFAULT_COLORS[kind.value];
+      mapUI.newShape = snap.config.TOKEN_DEFAULT_SHAPES[kind.value];
       render();
     };
     const addBtn = el(`<button class="mini primary">${spawn ? '✓ spawn here' : '+ place at camera'}</button>`);
@@ -717,7 +732,10 @@
       const at = spawn || CampfireMap.clampToGrid(map,
         CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).col,
         CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).row);
-      const payload = { kind: mapUI.newKind, col: at.col, row: at.row, color: mapUI.newColor };
+      const payload = {
+        kind: mapUI.newKind, col: at.col, row: at.row, color: mapUI.newColor,
+        shape: mapUI.newShape, w: mapUI.newW, h: mapUI.newH,
+      };
       if (mapUI.newKind === 'pc') {
         if (!charSel.value) { conn.toast('every character already has a token', false); return; }
         payload.char_id = Number(charSel.value);
@@ -740,6 +758,18 @@
       row1.appendChild(cancelSpawn);
     }
     form.appendChild(row1);
+    const sizeRow = el(`<div class="btn-row" style="align-items:center"></div>`);
+    const shapeSel = el(`<select style="max-width:110px"><option value="circle">● round</option><option value="square">■ square</option></select>`);
+    shapeSel.value = mapUI.newShape;
+    shapeSel.onchange = () => { mapUI.newShape = shapeSel.value; };
+    const wIn = el(`<input type="number" min="1" max="50" style="width:62px;text-align:center">`);
+    const hIn = el(`<input type="number" min="1" max="50" style="width:62px;text-align:center">`);
+    wIn.value = mapUI.newW;
+    hIn.value = mapUI.newH;
+    wIn.onchange = () => { mapUI.newW = Math.max(1, Number(wIn.value) || 1); };
+    hIn.onchange = () => { mapUI.newH = Math.max(1, Number(hIn.value) || 1); };
+    sizeRow.append(shapeSel, el(`<span class="small">size:</span>`), wIn, el(`<span class="small">×</span>`), hIn, el(`<span class="muted small">cells</span>`));
+    form.appendChild(sizeRow);
     form.appendChild(colorPicker(mapUI.newColor, (c) => { mapUI.newColor = c; render(); }));
     box.appendChild(form);
 
@@ -750,11 +780,12 @@
       const dotColor = t.kind === 'glow' ? t.glow_color : t.color;
       const row = el(`<div class="attr-row" style="cursor:pointer${selected ? ';background:rgba(255,140,46,.08)' : ''}"></div>`);
       row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">
-        <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};border:1px solid #000;vertical-align:middle"></span>
-        ${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})</span></span>`));
+        <span style="display:inline-block;width:14px;height:14px;border-radius:${t.shape === 'square' ? '3px' : '50%'};background:${dotColor};border:1px solid #000;vertical-align:middle"></span>
+        ${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})${t.w > 1 || t.h > 1 ? ` ${t.w}×${t.h}` : ''}</span></span>`));
       row.onclick = () => {
         mapUI.selectedToken = selected ? null : t.id;
         if (mapUI.recoloring !== t.id) mapUI.recoloring = null;
+        if (mapUI.resizing !== t.id) mapUI.resizing = null;
         render();
       };
       if (selected) {
@@ -771,11 +802,19 @@
         paint.onclick = (ev) => {
           ev.stopPropagation();
           mapUI.recoloring = mapUI.recoloring === t.id ? null : t.id;
+          mapUI.resizing = null;
+          render();
+        };
+        const resize = el(`<button class="mini ${mapUI.resizing === t.id ? 'primary' : 'ghost'}">📐</button>`);
+        resize.onclick = (ev) => {
+          ev.stopPropagation();
+          mapUI.resizing = mapUI.resizing === t.id ? null : t.id;
+          mapUI.recoloring = null;
           render();
         };
         const del = el(`<button class="mini danger ghost">✕</button>`);
         del.onclick = (ev) => { ev.stopPropagation(); mapUI.selectedToken = null; conn.action('token.delete', { token_id: t.id }); };
-        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, del);
+        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, resize, del);
         row.appendChild(pad);
       }
       box.appendChild(row);
@@ -784,6 +823,21 @@
         paintRow.onclick = (ev) => ev.stopPropagation();
         paintRow.appendChild(colorPicker(dotColor, (c) => conn.action('token.set_color', { token_id: t.id, color: c })));
         box.appendChild(paintRow);
+      }
+      if (selected && mapUI.resizing === t.id) {
+        const sizeEdit = el(`<div class="btn-row" style="padding:4px 0 8px;align-items:center"></div>`);
+        sizeEdit.onclick = (ev) => ev.stopPropagation();
+        const shapeSel2 = el(`<select style="max-width:110px"><option value="circle">● round</option><option value="square">■ square</option></select>`);
+        shapeSel2.value = t.shape;
+        const w2 = el(`<input type="number" min="1" max="50" value="${t.w}" style="width:62px;text-align:center">`);
+        const h2 = el(`<input type="number" min="1" max="50" value="${t.h}" style="width:62px;text-align:center">`);
+        const apply = el(`<button class="mini primary">apply</button>`);
+        apply.onclick = () => conn.action('token.set_size', {
+          token_id: t.id, shape: shapeSel2.value,
+          w: Math.max(1, Number(w2.value) || 1), h: Math.max(1, Number(h2.value) || 1),
+        });
+        sizeEdit.append(shapeSel2, el(`<span class="small">size:</span>`), w2, el(`<span class="small">×</span>`), h2, apply);
+        box.appendChild(sizeEdit);
       }
     }
     if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — long-press the minimap to spawn one, or use the form above.</p>`));

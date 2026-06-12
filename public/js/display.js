@@ -125,10 +125,13 @@
     pixi.tokenLayer.removeChildren();
     pixi.glows = [];
     const turnEntry = snap.initiative.entries.find((e) => e.id === snap.initiative.turn_id);
-    const r = map.cell_size * 0.4;
 
     for (const tok of snap.tokens) {
-      const { x, y } = CampfireMap.cellCenter(map, tok.col, tok.row);
+      // footprint: (col,row) is the top-left cell; w×h cells; render from its center
+      const fw = tok.w * map.cell_size;
+      const fh = tok.h * map.cell_size;
+      const x = map.offset_x + tok.col * map.cell_size + fw / 2;
+      const y = map.offset_y + tok.row * map.cell_size + fh / 2;
 
       if (tok.kind === 'glow') {
         const g = new PIXI.Graphics();
@@ -158,8 +161,15 @@
       } else {
         disc.lineStyle(2, 0x000000, 0.8);
       }
-      disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
-      disc.drawCircle(0, 0, r);
+      if (tok.shape === 'square') {
+        // squares fill their cells (terrain): edge-to-edge, slightly translucent
+        disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.8);
+        disc.drawRoundedRect(-fw / 2, -fh / 2, fw, fh, map.cell_size * 0.12);
+      } else {
+        // circles sit inside the footprint (creatures); 1x1 stays the classic disc
+        disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
+        disc.drawEllipse(0, 0, fw * 0.4, fh * 0.4);
+      }
       disc.endFill();
       holder.addChild(disc);
 
@@ -172,7 +182,7 @@
         align: 'center',
       });
       label.anchor.set(0.5, 0);
-      label.position.set(0, r * 1.1);
+      label.position.set(0, (tok.shape === 'square' ? fh / 2 : fh * 0.4) + map.cell_size * 0.05);
       holder.addChild(label);
 
       if (dead) holder.alpha = 0.55;

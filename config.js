@@ -43,6 +43,9 @@ module.exports = {
   // --- Battle map (Phase 3) ---
   TOKEN_KINDS: ['pc', 'monster', 'glow', 'terrain'],
   TOKEN_DEFAULT_COLORS: { pc: '#3e8ed0', monster: '#c43c34', terrain: '#8a8a8a', glow: '#ff8c2e' },
+  TOKEN_SHAPES: ['circle', 'square'],
+  TOKEN_DEFAULT_SHAPES: { pc: 'circle', monster: 'circle', terrain: 'square', glow: 'circle' },
+  TOKEN_MAX_SIZE: 50, // max footprint edge in cells
   CUSTOM_COLOR_LIMIT: 24,
   CAMERA_ZOOM_MIN: 0.05,
   CAMERA_ZOOM_MAX: 20,
