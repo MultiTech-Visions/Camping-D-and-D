@@ -49,10 +49,14 @@ a { color: var(--ember); }
 /* --- header / nav --- */
 .site-head { text-align: center; padding-top: 10px; }
 .site-head .flame { font-size: 2.2rem; filter: drop-shadow(0 0 12px rgba(255, 140, 46, 0.6)); }
-.nav { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+.nav {
+  display: flex; gap: 6px; justify-content: center; flex-wrap: nowrap; margin: 12px 0;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px;
+}
 .nav a {
   text-decoration: none; color: var(--ink-dim); border: 1px solid var(--line);
   border-radius: 999px; padding: 6px 14px; font-size: 0.9rem; background: var(--bg-card);
+  white-space: nowrap; flex-shrink: 0;
 }
 .nav a.active, .nav a:hover { color: var(--ember); border-color: var(--ember-deep); }
 
@@ -115,6 +119,10 @@ label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.
   border-bottom: 1px dashed var(--line); flex-wrap: wrap;
 }
 .attr-row:last-child { border-bottom: none; }
+.attr-row.turn-active {
+  background: rgba(255, 140, 46, 0.08); border-radius: 8px;
+  border-bottom-color: var(--ember);
+}
 .attr-name { width: 110px; font-weight: 700; text-transform: capitalize; }
 .attr-rank { font-size: 1.3rem; min-width: 64px; text-align: center; }
 .attr-rank .drained { color: var(--danger); }
@@ -242,7 +250,68 @@ body.display-mode .clock-kind {
 #embers { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 .display-grid { position: relative; z-index: 1; }
 
+/* --- GM screen collapsible sections --- */
+.section-toggle {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  user-select: none; -webkit-user-select: none; padding: 2px 0;
+}
+.section-arrow {
+  font-size: 0.7em; color: var(--ink-dim); transition: transform 0.15s;
+}
+
+/* --- GM section jump pills --- */
+.section-jumps {
+  display: flex; gap: 6px; margin: 8px 0;
+}
+.section-pill {
+  display: flex; align-items: center; gap: 4px; min-height: 38px;
+  padding: 4px 10px; font-size: 1.1rem; border-radius: 999px;
+  background: var(--bg-card); border: 1px solid var(--line);
+  white-space: nowrap; flex: 1; justify-content: center;
+}
+.section-pill.active { border-color: var(--ember-deep); color: var(--ember); }
+.section-pill-count { font-size: 0.75rem; color: var(--ink-dim); }
+
+/* --- GM sticky bottom bar --- */
+.gm-sticky {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--bg-card); border-top: 2px solid var(--ember-deep);
+  padding: 10px 16px; display: flex; align-items: center; gap: 10px;
+  z-index: 50; box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+}
+.gm-sticky-turn {
+  flex: 1; font-weight: 700; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* --- Camera controls layout --- */
+.cam-controls {
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin: 8px 0;
+}
+.cam-pad {
+  display: grid; grid-template-columns: repeat(3, 46px); gap: 4px;
+}
+.cam-pad button { min-height: 46px; font-size: 1.1rem; padding: 4px; }
+.cam-side {
+  display: flex; flex-direction: column; gap: 6px; align-items: center;
+}
+
+/* --- Camera minimap --- */
+.cam-minimap {
+  position: relative; max-width: 400px; cursor: crosshair;
+}
+
+/* --- form stacking helper --- */
+.form-stack { display: flex; flex-direction: column; gap: 4px; }
+
 @media (max-width: 720px) {
+  .wrap { padding: 10px 10px 90px; }
   .display-grid { grid-template-columns: 1fr; }
   .attr-name { width: 90px; }
+  .cam-minimap { max-width: 100%; }
+  .cam-controls { justify-content: center; }
+  .section-pill { padding: 4px 6px; font-size: 1rem; }
+  .card { padding: 12px; }
+  button.mini { padding: 4px 8px; font-size: 0.85rem; }
 }
