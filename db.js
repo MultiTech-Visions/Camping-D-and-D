@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS token (
   char_id     INTEGER REFERENCES character(id) ON DELETE CASCADE,  -- only for kind='pc'
   col         INTEGER NOT NULL,
   row         INTEGER NOT NULL,
+  color       TEXT    NOT NULL,    -- '#rrggbb' disc color (mirrors glow_color for glows)
   glow_color  TEXT,
   glow_radius REAL,
   glow_pulse  REAL
@@ -101,6 +102,13 @@ if (!mapCols.some((c) => c.name === 'grid_visible')) {
 if (!mapCols.some((c) => c.name === 'name')) {
   db.exec(`ALTER TABLE map_calibration ADD COLUMN name TEXT NOT NULL DEFAULT ''`);
   db.exec(`UPDATE map_calibration SET name = 'Map ' || id WHERE name = ''`);
+}
+if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'color')) {
+  db.exec(`ALTER TABLE token ADD COLUMN color TEXT NOT NULL DEFAULT ''`);
+  db.exec(`UPDATE token SET color = CASE kind
+    WHEN 'pc' THEN '#3e8ed0' WHEN 'monster' THEN '#c43c34'
+    WHEN 'terrain' THEN '#8a8a8a' ELSE COALESCE(glow_color, '#ff8c2e') END
+    WHERE color = ''`);
 }
 
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
@@ -153,11 +161,11 @@ const stmts = {
   allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
 
   insertToken: db.prepare(`
-    INSERT INTO token (label, kind, char_id, col, row, glow_color, glow_radius, glow_pulse)
-    VALUES (@label, @kind, @char_id, @col, @row, @glow_color, @glow_radius, @glow_pulse)`),
+    INSERT INTO token (label, kind, char_id, col, row, color, glow_color, glow_radius, glow_pulse)
+    VALUES (@label, @kind, @char_id, @col, @row, @color, @glow_color, @glow_radius, @glow_pulse)`),
   updateToken: db.prepare(`
     UPDATE token SET label=@label, kind=@kind, char_id=@char_id, col=@col, row=@row,
-      glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
+      color=@color, glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
   deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
   allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 

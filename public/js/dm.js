@@ -11,6 +11,7 @@
     role: 'dm',
     onSnapshot(s) {
       snap = s;
+      if (mapUI.draggingViewport) return queueRender(s); // don't rebuild the minimap mid-drag
       const ae = document.activeElement;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.dataset.live !== '1') return queueRender(s);
       render();
@@ -84,12 +85,15 @@
       const name = c ? c.name : e.label;
       const icon = c ? (c.system === 'campfire' ? '🔥' : '🐉') : '👹';
       const isTurn = snap.initiative.turn_id === e.id;
-      const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}"></div>`);
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}</span>`));
+      const hidden = e.visibility === 'dm_only';
+      const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}" ${hidden ? 'style="opacity:.65"' : ''}></div>`);
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
       const up = el(`<button class="mini" title="move up">↑</button>`);
       const down = el(`<button class="mini" title="move down">↓</button>`);
       const turn = el(`<button class="mini ${isTurn ? 'primary' : ''}">turn</button>`);
+      const eye = el(`<button class="mini ghost" title="${hidden ? 'show on the projector + player phones' : 'hide from the projector + player phones (GM-only reminder)'}">${hidden ? '👁' : '🙈'}</button>`);
+      eye.onclick = () => conn.action('initiative.set_visibility', { entry_id: e.id, visibility: hidden ? 'visible' : 'dm_only' });
       const out = el(`<button class="mini ghost" title="remove from initiative">✕</button>`);
       up.disabled = i === 0;
       down.disabled = i === entries.length - 1;
@@ -97,7 +101,7 @@
       down.onclick = () => reorder(i, i + 1);
       turn.onclick = () => conn.action('initiative.set_turn', { entry_id: e.id });
       out.onclick = () => conn.action('initiative.remove', { entry_id: e.id });
-      ctl.append(up, down, turn, out);
+      ctl.append(up, down, turn, eye, out);
       row.appendChild(ctl);
       box.appendChild(row);
     }
@@ -197,7 +201,43 @@
     cellsAcross: 5,
     cellsDown: 5,
     selectedToken: null,
+    draggingViewport: false, // suppress re-renders while dragging the minimap box
+    pendingSpawn: null,      // {col,row} from a minimap long-press, awaiting the form
+    recoloring: null,        // token id whose color picker is open
+    newLabel: '',            // create-form state that must survive re-renders
+    newKind: 'monster',
+    newColor: '#c43c34',
   };
+
+  // Broad starter colors; the GM's own colors live in snap.custom_colors.
+  const BASIC_COLORS = ['#c43c34', '#e2701a', '#e7c52a', '#3f9b4f', '#3e8ed0', '#7b4fa6', '#d957a8', '#f3e9d8', '#8a8a8a', '#2b2b2e'];
+
+  // ONE color picker: basic swatches, the saved palette (gold ring), a custom
+  // color input, ⭐ to save the current color, 🗑 to unsave it.
+  function colorPicker(current, onPick) {
+    const wrap = el(`<div class="btn-row" style="gap:4px;align-items:center"></div>`);
+    const swatch = (color, saved) => {
+      const sel = color === current;
+      const b = el(`<button class="mini" title="${color}${saved ? ' (saved)' : ''}" style="width:30px;height:30px;min-height:30px;padding:0;border-radius:50%;background:${color};border:2px solid ${sel ? 'var(--ember)' : saved ? 'var(--gold)' : 'var(--line)'};${sel ? 'box-shadow:0 0 6px var(--ember)' : ''}"></button>`);
+      b.onclick = () => onPick(color);
+      return b;
+    };
+    for (const c of BASIC_COLORS) wrap.appendChild(swatch(c, false));
+    for (const c of snap.custom_colors) wrap.appendChild(swatch(c, true));
+    const custom = el(`<input type="color" value="${current}" title="custom color" style="width:38px;height:30px;padding:1px;border-radius:6px;flex:none">`);
+    custom.onchange = () => onPick(custom.value.toLowerCase());
+    wrap.appendChild(custom);
+    if (snap.custom_colors.includes(current)) {
+      const unsave = el(`<button class="mini ghost" title="remove this color from the saved palette">🗑</button>`);
+      unsave.onclick = () => conn.action('palette.delete_color', { color: current });
+      wrap.appendChild(unsave);
+    } else {
+      const save = el(`<button class="mini ghost" title="save this color to the palette">⭐</button>`);
+      save.onclick = () => conn.action('palette.save_color', { color: current });
+      wrap.appendChild(save);
+    }
+    return wrap;
+  }
 
   function mapManager() {
     const box = el(`<div class="card"><h3>🗺 Battle map</h3></div>`);
@@ -424,31 +464,142 @@
     const miniImg = el(`<img src="${map.image_path}" style="width:100%;display:block;border:1px solid var(--line);border-radius:8px" draggable="false">`);
     mini.appendChild(miniImg);
 
-    const TOKEN_DOT = { pc: '#3e8ed0', monster: '#c43c34', terrain: '#8a8a8a', glow: '#f0b429' };
     for (const t of snap.tokens) {
       const c = CampfireMap.cellCenter(map, t.col, t.row);
       const selected = mapUI.selectedToken === t.id;
-      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:10px;height:10px;margin:-5px;border-radius:50%;background:${TOKEN_DOT[t.kind]};border:2px solid ${selected ? 'var(--ember)' : '#000'};pointer-events:none;z-index:2"></div>`));
+      const dotColor = t.kind === 'glow' ? t.glow_color : t.color;
+      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${(c.x / map.image_w) * 100}%;top:${(c.y / map.image_h) * 100}%;width:${selected ? 14 : 10}px;height:${selected ? 14 : 10}px;margin:${selected ? -7 : -5}px;border-radius:50%;background:${dotColor};border:2px solid ${selected ? 'var(--ember)' : '#000'};${selected ? 'box-shadow:0 0 8px var(--ember);' : ''}pointer-events:none;z-index:2"></div>`));
     }
 
     // What the projector is actually showing: the real viewport rectangle,
     // sized from the display's reported screen ÷ zoom, rotated with the
     // camera. Falls back to a small frame if no display is connected yet.
     const vp = snap.display_viewport;
+    let vpBox;
     if (vp) {
       const wPct = (vp.width / cam.zoom / map.image_w) * 100;
       const hPct = (vp.height / cam.zoom / map.image_h) * 100;
       mini.style.overflow = 'hidden';
-      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`));
+      vpBox = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:${wPct}%;height:${hPct}%;transform:translate(-50%,-50%) rotate(${-cam.rotation_deg}deg);border:2px solid var(--ember);box-shadow:0 0 10px rgba(255,140,46,.5), inset 0 0 30px rgba(255,140,46,.12);pointer-events:none;z-index:1"></div>`);
     } else {
-      mini.appendChild(el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`));
+      vpBox = el(`<div style="position:absolute;left:${(cam.center_x / map.image_w) * 100}%;top:${(cam.center_y / map.image_h) * 100}%;width:26px;height:26px;margin:-13px;border:2px solid var(--ember);border-radius:5px;box-shadow:0 0 8px rgba(255,140,46,.6);pointer-events:none;z-index:1"></div>`);
     }
+    mini.appendChild(vpBox);
 
-    miniImg.onclick = (ev) => {
+    // Minimap gestures:
+    //   tap (token selected)  → teleport that token to the tapped cell
+    //   tap (nothing selected) → jump the camera there
+    //   drag the box / drag anywhere → pan the camera, projector follows live
+    //   LONG-PRESS an empty spot → spawn-a-token form at that cell
+    mini.style.touchAction = 'none';
+    let grabDX = 0, grabDY = 0, lastLiveSend = 0;
+    let dragX = cam.center_x, dragY = cam.center_y;
+    let gestureMode = null; // 'camera' | 'tap'
+    let longTimer = null, longFired = false, downClient = null;
+    const toImage = (ev) => {
       const r = miniImg.getBoundingClientRect();
-      send({ ...cam, center_x: ((ev.clientX - r.left) / r.width) * map.image_w, center_y: ((ev.clientY - r.top) / r.height) * map.image_h });
+      return {
+        x: Math.min(Math.max(((ev.clientX - r.left) / r.width) * map.image_w, 0), map.image_w),
+        y: Math.min(Math.max(((ev.clientY - r.top) / r.height) * map.image_h, 0), map.image_h),
+      };
+    };
+    const toCell = (p) => {
+      const g = CampfireMap.imageToGrid(map, p.x, p.y);
+      return CampfireMap.clampToGrid(map, g.col, g.row);
+    };
+    const placeBox = (x, y) => {
+      vpBox.style.left = `${(x / map.image_w) * 100}%`;
+      vpBox.style.top = `${(y / map.image_h) * 100}%`;
+    };
+    mini.onpointerdown = (ev) => {
+      ev.preventDefault();
+      const p = toImage(ev);
+      downClient = { x: ev.clientX, y: ev.clientY };
+      longFired = false;
+      const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
+      const halfH = vp ? vp.height / cam.zoom / 2 : map.image_h * 0.04;
+      if (Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
+        gestureMode = 'camera'; // grabbed the box — keep the grip point
+        grabDX = dragX - p.x;
+        grabDY = dragY - p.y;
+        mapUI.draggingViewport = true;
+      } else {
+        gestureMode = 'tap';
+        grabDX = 0;
+        grabDY = 0;
+        longTimer = setTimeout(() => {
+          longFired = true;
+          gestureMode = null;
+          mapUI.draggingViewport = false;
+          mapUI.pendingSpawn = toCell(p);
+          if (navigator.vibrate) navigator.vibrate(30);
+          render();
+        }, 550);
+      }
+      mini.setPointerCapture(ev.pointerId);
+    };
+    mini.onpointermove = (ev) => {
+      if (longFired) return;
+      if (gestureMode === 'tap'
+          && Math.hypot(ev.clientX - downClient.x, ev.clientY - downClient.y) > 10) {
+        clearTimeout(longTimer); // moving = a camera drag, not a tap or long-press
+        gestureMode = 'camera';
+        mapUI.draggingViewport = true;
+        const p = toImage(ev);
+        dragX = p.x;
+        dragY = p.y;
+        placeBox(dragX, dragY);
+      }
+      if (gestureMode === 'camera' && mapUI.draggingViewport) {
+        const p = toImage(ev);
+        dragX = Math.min(Math.max(p.x + grabDX, 0), map.image_w);
+        dragY = Math.min(Math.max(p.y + grabDY, 0), map.image_h);
+        placeBox(dragX, dragY);
+        const now = Date.now();
+        if (now - lastLiveSend > 120) { // live-follow on the projector
+          lastLiveSend = now;
+          send({ ...cam, center_x: dragX, center_y: dragY });
+        }
+      }
+    };
+    const endDrag = () => {
+      if (!mapUI.draggingViewport) return;
+      mapUI.draggingViewport = false;
+      snap.camera.center_x = dragX; // optimistic — the server echo confirms
+      snap.camera.center_y = dragY;
+      send({ ...cam, center_x: dragX, center_y: dragY });
+    };
+    mini.onpointerup = (ev) => {
+      clearTimeout(longTimer);
+      if (longFired) { gestureMode = null; return; }
+      if (gestureMode === 'camera') {
+        endDrag();
+      } else if (gestureMode === 'tap') {
+        const p = toImage(ev);
+        const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
+        if (sel) {
+          const cell = toCell(p); // teleport the selected token, arrows fine-tune
+          conn.action('token.move', { token_id: sel.id, col: cell.col, row: cell.row });
+        } else {
+          dragX = p.x;
+          dragY = p.y;
+          snap.camera.center_x = p.x;
+          snap.camera.center_y = p.y;
+          send({ ...cam, center_x: p.x, center_y: p.y });
+        }
+      }
+      gestureMode = null;
+    };
+    mini.onpointercancel = () => {
+      clearTimeout(longTimer);
+      if (gestureMode === 'camera') endDrag();
+      gestureMode = null;
     };
     box.appendChild(mini);
+    const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
+    box.appendChild(el(`<p class="small" style="margin:4px 0;${sel ? 'color:var(--gold)' : ''}">${sel
+      ? `♟ Tap the minimap to move <strong>${esc(sel.label)}</strong> there (arrows fine-tune).`
+      : 'Tap = aim camera · drag = pan · <strong>long-press = spawn a token there</strong>.'}</p>`));
     box.appendChild(el(`<p class="muted small" style="margin:4px 0">Dots = tokens (blue players, red monsters) · orange frame = where the camera points.
       The full battle map renders on the <a href="/display" target="_blank">projector page</a>.</p>`));
 
@@ -528,49 +679,76 @@
     const box = el(`<div></div>`);
     box.appendChild(el(`<h3 style="margin:4px 0">♟ Tokens <span class="muted small">(${dims.cols}×${dims.rows} grid)</span></h3>`));
 
-    // create form
-    const form = el(`<div class="btn-row"></div>`);
+    // create form (also the long-press spawn form — then it carries the cell)
+    const spawn = mapUI.pendingSpawn;
+    const form = el(`<div style="${spawn ? 'border:1px solid var(--gold);border-radius:10px;padding:8px;margin:6px 0' : ''}"></div>`);
+    if (spawn) {
+      form.appendChild(el(`<div class="small" style="color:var(--gold)">✨ New token at (${spawn.col},${spawn.row}) — from your long-press:</div>`));
+    }
+    const row1 = el(`<div class="btn-row"></div>`);
     const label = el(`<input type="text" placeholder="Ogre" style="max-width:130px" maxlength="30">`);
+    label.value = mapUI.newLabel;
+    label.oninput = () => { mapUI.newLabel = label.value; };
     const kind = el(`<select style="max-width:110px">
       <option value="monster">monster</option><option value="pc">player</option>
       <option value="terrain">terrain</option><option value="glow">glow</option></select>`);
-    const charSel = el(`<select style="max-width:140px;display:none"></select>`);
+    kind.value = mapUI.newKind;
+    const charSel = el(`<select style="max-width:140px;${mapUI.newKind === 'pc' ? '' : 'display:none'}"></select>`);
     for (const c of snap.characters) {
       if (!snap.tokens.some((t) => t.char_id === c.id)) {
         charSel.appendChild(el(`<option value="${c.id}">${esc(c.name)}</option>`));
       }
     }
-    kind.onchange = () => { charSel.style.display = kind.value === 'pc' ? '' : 'none'; };
-    const addBtn = el(`<button class="mini primary">+ place</button>`);
+    kind.onchange = () => {
+      mapUI.newKind = kind.value;
+      mapUI.newColor = snap.config.TOKEN_DEFAULT_COLORS[kind.value];
+      render();
+    };
+    const addBtn = el(`<button class="mini primary">${spawn ? '✓ spawn here' : '+ place at camera'}</button>`);
     addBtn.onclick = () => {
-      const cam = snap.camera;
-      const at = CampfireMap.clampToGrid(map, ...Object.values(CampfireMap.imageToGrid(map, cam.center_x, cam.center_y)));
-      const payload = { kind: kind.value, col: at.col, row: at.row };
-      if (kind.value === 'pc') {
+      const at = spawn || CampfireMap.clampToGrid(map,
+        CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).col,
+        CampfireMap.imageToGrid(map, snap.camera.center_x, snap.camera.center_y).row);
+      const payload = { kind: mapUI.newKind, col: at.col, row: at.row, color: mapUI.newColor };
+      if (mapUI.newKind === 'pc') {
         if (!charSel.value) { conn.toast('every character already has a token', false); return; }
         payload.char_id = Number(charSel.value);
         payload.label = snap.characters.find((c) => c.id === payload.char_id).name;
       } else {
-        payload.label = label.value.trim() || kind.value;
+        payload.label = mapUI.newLabel.trim() || mapUI.newKind;
       }
-      if (kind.value === 'glow') {
-        payload.glow_color = '#ff8c2e';
+      if (mapUI.newKind === 'glow') {
         payload.glow_radius = 3;
         payload.glow_pulse = 0.5;
       }
       conn.action('token.create', payload);
-      label.value = '';
+      mapUI.newLabel = '';
+      mapUI.pendingSpawn = null;
     };
-    form.append(label, kind, charSel, addBtn);
+    row1.append(label, kind, charSel, addBtn);
+    if (spawn) {
+      const cancelSpawn = el(`<button class="mini ghost">cancel</button>`);
+      cancelSpawn.onclick = () => { mapUI.pendingSpawn = null; render(); };
+      row1.appendChild(cancelSpawn);
+    }
+    form.appendChild(row1);
+    form.appendChild(colorPicker(mapUI.newColor, (c) => { mapUI.newColor = c; render(); }));
     box.appendChild(form);
 
-    // token list; tap to select, selected gets a d-pad
+    // token list; tap to select → d-pad + 🎨 recolor (and minimap tap-to-move)
     for (const t of snap.tokens) {
       const icons = { pc: '🧝', monster: '👹', terrain: '🪨', glow: '✨' };
       const selected = mapUI.selectedToken === t.id;
+      const dotColor = t.kind === 'glow' ? t.glow_color : t.color;
       const row = el(`<div class="attr-row" style="cursor:pointer${selected ? ';background:rgba(255,140,46,.08)' : ''}"></div>`);
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})</span></span>`));
-      row.onclick = () => { mapUI.selectedToken = selected ? null : t.id; render(); };
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">
+        <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};border:1px solid #000;vertical-align:middle"></span>
+        ${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})</span></span>`));
+      row.onclick = () => {
+        mapUI.selectedToken = selected ? null : t.id;
+        if (mapUI.recoloring !== t.id) mapUI.recoloring = null;
+        render();
+      };
       if (selected) {
         const pad = el(`<span class="btn-row" style="margin:0"></span>`);
         const mv = (dc, dr, txt) => {
@@ -581,14 +759,26 @@
           };
           return b;
         };
+        const paint = el(`<button class="mini ${mapUI.recoloring === t.id ? 'primary' : 'ghost'}">🎨</button>`);
+        paint.onclick = (ev) => {
+          ev.stopPropagation();
+          mapUI.recoloring = mapUI.recoloring === t.id ? null : t.id;
+          render();
+        };
         const del = el(`<button class="mini danger ghost">✕</button>`);
         del.onclick = (ev) => { ev.stopPropagation(); mapUI.selectedToken = null; conn.action('token.delete', { token_id: t.id }); };
-        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), del);
+        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, del);
         row.appendChild(pad);
       }
       box.appendChild(row);
+      if (selected && mapUI.recoloring === t.id) {
+        const paintRow = el(`<div style="padding:4px 0 8px"></div>`);
+        paintRow.onclick = (ev) => ev.stopPropagation();
+        paintRow.appendChild(colorPicker(dotColor, (c) => conn.action('token.set_color', { token_id: t.id, color: c })));
+        box.appendChild(paintRow);
+      }
     }
-    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — place the party!</p>`));
+    if (snap.tokens.length === 0) box.appendChild(el(`<p class="muted small">No tokens yet — long-press the minimap to spawn one, or use the form above.</p>`));
     return box;
   }
 

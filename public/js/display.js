@@ -16,6 +16,7 @@
 
 (function () {
   const turnEl = document.getElementById('d-turn');
+  const orderEl = document.getElementById('d-order');
   const clocksEl = document.getElementById('d-clocks');
   const rosterEl = document.getElementById('d-roster');
   const mapRoot = document.getElementById('map-root');
@@ -75,7 +76,9 @@
     mapRoot.innerHTML = '';
   }
 
-  const KIND_COLORS = { pc: 0x3e8ed0, monster: 0xc43c34, terrain: 0x6b6b6b };
+  function hexToNum(color) {
+    return Number(`0x${color.replace('#', '')}`);
+  }
 
   function renderMap(snap) {
     ensurePixi();
@@ -130,7 +133,7 @@
 
       if (tok.kind === 'glow') {
         const g = new PIXI.Graphics();
-        const color = Number(`0x${tok.glow_color.replace('#', '')}`);
+        const color = hexToNum(tok.glow_color);
         const radius = tok.glow_radius * map.cell_size;
         for (let i = 5; i >= 1; i--) {
           g.beginFill(color, 0.18);
@@ -156,7 +159,7 @@
       } else {
         disc.lineStyle(2, 0x000000, 0.8);
       }
-      disc.beginFill(KIND_COLORS[tok.kind], dead ? 0.35 : 0.95);
+      disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
       disc.drawCircle(0, 0, r);
       disc.endFill();
       holder.addChild(disc);
@@ -219,6 +222,16 @@
         turnEl.textContent = `▶ ${c.name}'s turn`;
       } else {
         turnEl.textContent = `▶ ${turnEntry.label}`;
+      }
+
+      // the full turn order — characters AND custom entries (Ogre, hazards…);
+      // the server already filtered out the GM's dm_only reminders
+      orderEl.innerHTML = '';
+      for (const e of snap.initiative.entries) {
+        const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
+        const name = c ? c.name : e.label;
+        const isTurn = snap.initiative.turn_id === e.id;
+        orderEl.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${c ? '' : '👹 '}${esc(name)}</span>`));
       }
 
       // visible clocks
