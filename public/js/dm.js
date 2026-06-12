@@ -511,6 +511,11 @@
       vpBox.style.left = `${(x / map.image_w) * 100}%`;
       vpBox.style.top = `${(y / map.image_h) * 100}%`;
     };
+    // While a token is selected, the minimap belongs to TOKEN PLACEMENT:
+    // camera drag and the viewport box are suspended so a tap (or
+    // drag-and-release) always places the token. Deselecting the token in
+    // the list hands the minimap back to the camera.
+    const tokenPlacementMode = () => snap.tokens.some((t) => t.id === mapUI.selectedToken);
     mini.onpointerdown = (ev) => {
       ev.preventDefault();
       const p = toImage(ev);
@@ -518,7 +523,8 @@
       longFired = false;
       const halfW = vp ? vp.width / cam.zoom / 2 : map.image_w * 0.04;
       const halfH = vp ? vp.height / cam.zoom / 2 : map.image_h * 0.04;
-      if (Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
+      if (!tokenPlacementMode()
+          && Math.abs(p.x - dragX) <= halfW && Math.abs(p.y - dragY) <= halfH) {
         gestureMode = 'camera'; // grabbed the box — keep the grip point
         grabDX = dragX - p.x;
         grabDY = dragY - p.y;
@@ -542,7 +548,8 @@
       if (longFired) return;
       if (gestureMode === 'tap'
           && Math.hypot(ev.clientX - downClient.x, ev.clientY - downClient.y) > 10) {
-        clearTimeout(longTimer); // moving = a camera drag, not a tap or long-press
+        clearTimeout(longTimer); // real movement — not a tap or long-press
+        if (tokenPlacementMode()) return; // stay in tap mode: place where the finger releases
         gestureMode = 'camera';
         mapUI.draggingViewport = true;
         const p = toImage(ev);
@@ -595,6 +602,7 @@
       if (gestureMode === 'camera') endDrag();
       gestureMode = null;
     };
+    if (tokenPlacementMode()) vpBox.style.opacity = '0.35'; // camera control is on hold
     box.appendChild(mini);
     const sel = snap.tokens.find((t) => t.id === mapUI.selectedToken);
     box.appendChild(el(`<p class="small" style="margin:4px 0;${sel ? 'color:var(--gold)' : ''}">${sel
