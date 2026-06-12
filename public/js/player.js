@@ -332,6 +332,33 @@
       mv(-1, 0, '◀'), el(`<span></span>`), mv(1, 0, '▶'),
       el(`<span></span>`), mv(0, 1, '▼'), el(`<span></span>`));
     box.appendChild(pad);
+
+    // your token, your face: players set their own token image
+    const artRow = el(`<div class="btn-row" style="justify-content:center;margin-top:10px"></div>`);
+    const artFile = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
+    if (mine.art) {
+      artRow.appendChild(el(`<span style="display:inline-block;width:34px;height:34px;border-radius:${mine.shape === 'square' ? '6px' : '50%'};background-image:url('${mine.art}');background-size:cover;background-position:center;border:2px solid var(--line)"></span>`));
+    }
+    const artBtn = el(`<button class="mini">🖼 ${mine.art ? 'Change my token image' : 'Set my token image'}</button>`);
+    artBtn.onclick = () => artFile.click();
+    artFile.onchange = async () => {
+      const file = artFile.files[0];
+      if (!file) return;
+      conn.toast('Uploading…', true);
+      const res = await fetch('/upload/token', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+      if (!res.ok) {
+        conn.toast(`upload failed: ${(await res.json()).error}`, false);
+        return;
+      }
+      conn.action('token.set_art', { token_id: mine.id, art: (await res.json()).art });
+    };
+    artRow.append(artBtn, artFile);
+    if (mine.art) {
+      const clear = el(`<button class="mini ghost" title="back to a plain colored token">🚫</button>`);
+      clear.onclick = () => conn.action('token.set_art', { token_id: mine.id, art: null });
+      artRow.appendChild(clear);
+    }
+    box.appendChild(artRow);
     return box;
   }
 
