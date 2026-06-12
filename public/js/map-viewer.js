@@ -48,9 +48,13 @@ window.CampfireMapViewer = (function () {
 
     const pointers = new Map();
     let pinchStart = null;
+    let tapHandler = null; // when set, taps place instead of pan/zoom
+    let downAt = null;
     viewport.onpointerdown = (ev) => {
       if (ev.target === closeBtn) return;
       viewport.setPointerCapture(ev.pointerId);
+      downAt = { x: ev.clientX, y: ev.clientY };
+      if (tapHandler) return; // tap-to-place mode: no pan/pinch
       pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -63,6 +67,7 @@ window.CampfireMapViewer = (function () {
       }
     };
     viewport.onpointermove = (ev) => {
+      if (tapHandler) return;
       const prev = pointers.get(ev.pointerId);
       if (!prev) return;
       const cur = { x: ev.clientX, y: ev.clientY };
@@ -84,6 +89,15 @@ window.CampfireMapViewer = (function () {
     const lift = (ev) => {
       pointers.delete(ev.pointerId);
       if (pointers.size < 2) pinchStart = null;
+      // tap-to-place: a clean tap (not a swipe) reports image-fraction coords
+      if (tapHandler && downAt
+          && Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) < 12) {
+        const r = holder.getBoundingClientRect();
+        const fx = (ev.clientX - r.left) / r.width;
+        const fy = (ev.clientY - r.top) / r.height;
+        if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) tapHandler(fx, fy);
+      }
+      downAt = null;
     };
     viewport.onpointerup = lift;
     viewport.onpointercancel = lift;
@@ -151,7 +165,16 @@ window.CampfireMapViewer = (function () {
     }
     closeBtn.onclick = close;
 
-    return { update, close };
+    // setTapMode(fn): taps call fn(fx, fy) in image fractions and pan/pinch is
+    // suspended; setTapMode(null) restores normal navigation.
+    function setTapMode(fn) {
+      tapHandler = fn;
+      viewport.style.cursor = fn ? 'crosshair' : '';
+      viewport.style.outline = fn ? '3px solid var(--ember)' : '';
+      viewport.style.outlineOffset = '-3px';
+    }
+
+    return { update, close, setTapMode };
   }
 
   return { open };

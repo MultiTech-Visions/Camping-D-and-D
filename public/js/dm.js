@@ -88,11 +88,12 @@
 
   // --- token mover: fullscreen pinch-zoom map + a big thumbable d-pad, so the
   //     GM can steer a token while watching the projector, not the phone -----
-  let tokenMover = null, tokenMoverId = null, tokenMoverInfo = null;
+  let tokenMover = null, tokenMoverId = null, tokenMoverInfo = null, tokenMoverTapOn = false;
 
   function openTokenMover(tokenId) {
     if (tokenMover) tokenMover.close();
     tokenMoverId = tokenId;
+    tokenMoverTapOn = false;
     const wrap = el(`<div></div>`);
     tokenMoverInfo = el(`<p class="center" style="margin:0 0 10px;font-size:1.1rem"></p>`);
     wrap.appendChild(tokenMoverInfo);
@@ -107,13 +108,33 @@
       };
       return b;
     };
+    // center button: tap-to-place mode — pan/zoom pauses, taps drop the token
+    // there; toggle off and the arrows finish the fine placement
+    const tapBtn = el(`<button class="ghost" title="tap-to-place: tap the map to put the token there">🎯</button>`);
+    tapBtn.onclick = () => {
+      tokenMoverTapOn = !tokenMoverTapOn;
+      tapBtn.className = tokenMoverTapOn ? 'primary' : 'ghost';
+      tokenMover.setTapMode(!tokenMoverTapOn ? null : (fx, fy) => {
+        const t = snap.tokens.find((x) => x.id === tokenMoverId);
+        if (!t) return;
+        const map = snap.map;
+        const g = CampfireMap.imageToGrid(map, fx * map.image_w, fy * map.image_h);
+        const dims = CampfireMap.gridDims(map);
+        conn.action('token.move', {
+          token_id: t.id,
+          col: Math.min(Math.max(g.col, 0), dims.cols - t.w),
+          row: Math.min(Math.max(g.row, 0), dims.rows - t.h),
+        });
+      });
+      updateTokenMover();
+    };
     pad.append(el(`<span></span>`), mv(0, -1, '▲'), el(`<span></span>`),
-      mv(-1, 0, '◀'), el(`<span></span>`), mv(1, 0, '▶'),
+      mv(-1, 0, '◀'), tapBtn, mv(1, 0, '▶'),
       el(`<span></span>`), mv(0, 1, '▼'), el(`<span></span>`));
     wrap.appendChild(pad);
     tokenMover = CampfireMapViewer.open({
       bottomEl: wrap,
-      onClose: () => { tokenMover = null; tokenMoverId = null; tokenMoverInfo = null; },
+      onClose: () => { tokenMover = null; tokenMoverId = null; tokenMoverInfo = null; tokenMoverTapOn = false; },
     });
     updateTokenMover();
   }
@@ -122,7 +143,9 @@
     if (!tokenMover) return;
     const t = snap.tokens.find((x) => x.id === tokenMoverId);
     if (!t || !snap.map) { tokenMover.close(); return; }
-    tokenMoverInfo.textContent = `🕹 ${t.label} — (${t.col}, ${t.row})`;
+    tokenMoverInfo.textContent = tokenMoverTapOn
+      ? `🎯 tap the map to place ${t.label} — (${t.col}, ${t.row})`
+      : `🕹 ${t.label} — (${t.col}, ${t.row})`;
     tokenMover.update(snap, { highlight: tokenMoverId });
   }
 
