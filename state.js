@@ -52,16 +52,35 @@ function load() {
   R.assert(runtime && runtime.perChar, 'corrupt DB: runtime row malformed');
 
   state.characters.clear();
+  const migratedSheets = [];
   for (const row of stmts.allCharacters.all()) {
     const rt = runtime.perChar[row.id];
+    let sheet = null;
+    if (row.system === 'dnd5e') {
+      sheet = JSON.parse(row.dnd_sheet);
+      // One-time migration for sheets created before skills existed.
+      let migrated = false;
+      if (sheet.skills === undefined) {
+        sheet.skills = {};
+        for (const s of config.DND.SKILLS) sheet.skills[s.key] = { prof: 0, misc: 0 };
+        migrated = true;
+      }
+      if (sheet.custom_skills === undefined) {
+        sheet.custom_skills = [];
+        migrated = true;
+      }
+      R.validateDndSheet(sheet);
+      if (migrated) migratedSheets.push(row.id);
+    }
     state.characters.set(row.id, {
       ...row,
-      dnd_sheet: row.system === 'dnd5e' ? R.validateDndSheet(JSON.parse(row.dnd_sheet)) : null,
+      dnd_sheet: sheet,
       drain: rt ? rt.drain : zeroDrain(),
       granted_blue: rt ? rt.granted_blue : 0,
       conditions: [],
     });
   }
+  for (const id of migratedSheets) persistCharacter(state.characters.get(id));
   for (const c of stmts.allConditions.all()) {
     const char = state.characters.get(c.char_id);
     R.assert(char, `corrupt DB: condition ${c.id} references missing character ${c.char_id}`);

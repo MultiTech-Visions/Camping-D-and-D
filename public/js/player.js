@@ -222,6 +222,30 @@
     fieldIn(row2, 'Speed', 'd-speed', 'number', 30, 'min="0" max="200"');
     fieldIn(row2, 'Prof. bonus', 'd-prof', 'number', 2, 'min="0" max="10"');
 
+    // skills: tap to cycle proficiency; bonuses recompute live from the
+    // ability and proficiency inputs above
+    card.appendChild(el(`<h3 style="margin-top:16px">Skills <span class="muted small">(tap to cycle: ○ none → ● proficient → ★ expertise)</span></h3>`));
+    const builderSkills = {};
+    const skillGrid = el(`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:4px"></div>`);
+    const skillRefreshers = [];
+    for (const sk of cfg.SKILLS) {
+      builderSkills[sk.key] = 0;
+      const b = el(`<button class="mini ghost" style="text-align:left"></button>`);
+      const refresh = () => {
+        const mod = Math.floor(((Number(f[`d-${sk.ability}`].value) || 10) - 10) / 2);
+        const bonus = mod + builderSkills[sk.key] * (Number(f['d-prof'].value) || 0);
+        b.innerHTML = `${['○', '●', '★'][builderSkills[sk.key]]} ${sk.label}<span style="float:right;color:var(--gold)">${bonus >= 0 ? '+' : ''}${bonus}</span>`;
+      };
+      b.onclick = () => { builderSkills[sk.key] = (builderSkills[sk.key] + 1) % 3; refresh(); };
+      skillRefreshers.push(refresh);
+      refresh();
+      skillGrid.appendChild(b);
+    }
+    card.appendChild(skillGrid);
+    const refreshSkills = () => skillRefreshers.forEach((fn) => fn());
+    for (const ab of cfg.ABILITIES) f[`d-${ab}`].addEventListener('input', refreshSkills);
+    f['d-prof'].addEventListener('input', refreshSkills);
+
     field('Gear (optional)', 'd-gear', 'text', '');
     field('Secret / hook only the GM sees (optional)', 'd-desire', 'text', '', 'maxlength="200"');
 
@@ -243,6 +267,8 @@
         death_successes: 0,
         death_failures: 0,
         spell_slots: Array.from({ length: cfg.SPELL_LEVELS }, () => ({ max: 0, used: 0 })),
+        skills: Object.fromEntries(cfg.SKILLS.map((sk) => [sk.key, { prof: builderSkills[sk.key], misc: 0 }])),
+        custom_skills: [],
       };
       conn.action('character.create', {
         system: 'dnd5e',
@@ -515,6 +541,48 @@
     statCard.appendChild(editBtn);
     root.appendChild(statCard);
 
+    // Skills: tap to cycle proficiency; bonus = ability mod + prof×bonus + misc
+    const skillCard = el(`<div class="card"><h3>Skills <span class="muted small">(tap: ○ none → ● proficient → ★ expertise)</span></h3></div>`);
+    const skillGrid = el(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"></div>`);
+    for (const sk of snap.config.DND.SKILLS) {
+      const entry = s.skills[sk.key];
+      const mod = Math.floor((s.abilities[sk.ability] - 10) / 2);
+      const bonus = mod + entry.prof * s.prof_bonus + entry.misc;
+      const b = el(`<button class="mini ghost" style="text-align:left">${['○', '●', '★'][entry.prof]} ${sk.label}<span style="float:right;color:var(--gold)">${bonus >= 0 ? '+' : ''}${bonus}${entry.misc !== 0 ? '*' : ''}</span></button>`);
+      b.title = `${sk.label} (${sk.ability.toUpperCase()})${entry.misc !== 0 ? ` — includes ${entry.misc > 0 ? '+' : ''}${entry.misc} misc` : ''}`;
+      b.onclick = () => sendSheet((n) => { n.skills[sk.key].prof = (n.skills[sk.key].prof + 1) % 3; });
+      skillGrid.appendChild(b);
+    }
+    skillCard.appendChild(skillGrid);
+
+    // custom proficiencies: tools, instruments, languages, weird stuff
+    if (s.custom_skills.length > 0) {
+      skillCard.appendChild(el(`<h3 style="margin-top:10px">Other proficiencies</h3>`));
+      s.custom_skills.forEach((cs, i) => {
+        const row = el(`<div class="attr-row" style="padding:6px 0"></div>`);
+        row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${esc(cs.name)} <span style="color:var(--gold)">${cs.bonus >= 0 ? '+' : ''}${cs.bonus}</span></span>`));
+        const del = el(`<button class="mini danger ghost">✕</button>`);
+        del.onclick = () => sendSheet((n) => { n.custom_skills.splice(i, 1); });
+        row.appendChild(del);
+        skillCard.appendChild(row);
+      });
+    }
+    const addRow = el(`<div class="btn-row"></div>`);
+    const csName = el(`<input type="text" placeholder="Thieves' tools, Elvish…" style="max-width:200px" maxlength="40">`);
+    const csBonus = el(`<input type="number" value="0" min="-20" max="20" style="width:70px;text-align:center">`);
+    const csAdd = el(`<button class="mini">+ add</button>`);
+    csAdd.onclick = () => {
+      if (!csName.value.trim()) return;
+      const name = csName.value.trim();
+      const bonus = Number(csBonus.value) || 0;
+      sendSheet((n) => { n.custom_skills.push({ name, bonus }); });
+      csName.value = '';
+    };
+    addRow.append(csName, csBonus, csAdd);
+    skillCard.appendChild(addRow);
+    skillCard.appendChild(el(`<p class="muted small">* includes a misc bonus — set those in ✏ Edit stats.</p>`));
+    root.appendChild(skillCard);
+
     // Spell slots
     const hasSlots = s.spell_slots.some((x) => x.max > 0);
     const slotCard = el(`<div class="card"><h3>Spell slots</h3></div>`);
@@ -594,6 +662,17 @@
     }
     card.appendChild(slotGrid);
 
+    card.appendChild(el(`<h3>Skill misc bonuses <span class="muted small">(flat extras from feats/items — proficiency is tapped on the sheet)</span></h3>`));
+    const miscGrid = el(`<div class="stat-grid"></div>`);
+    for (const sk of snap.config.DND.SKILLS) {
+      const tile = el(`<div class="stat-tile"><div class="k" style="font-size:0.6rem">${sk.label}</div></div>`);
+      const input = el(`<input type="number" id="e-misc-${sk.key}" value="${s.skills[sk.key].misc}" min="-20" max="20" style="text-align:center">`);
+      tile.appendChild(input);
+      miscGrid.appendChild(tile);
+      f[`e-misc-${sk.key}`] = input;
+    }
+    card.appendChild(miscGrid);
+
     const row = el(`<div class="btn-row"></div>`);
     const save = el(`<button class="primary">Save</button>`);
     save.onclick = () => {
@@ -606,6 +685,9 @@
       for (let lvl = 0; lvl < next.spell_slots.length; lvl++) {
         next.spell_slots[lvl].max = num(`e-slot-${lvl}`);
         next.spell_slots[lvl].used = Math.min(next.spell_slots[lvl].used, next.spell_slots[lvl].max);
+      }
+      for (const sk of snap.config.DND.SKILLS) {
+        next.skills[sk.key].misc = num(`e-misc-${sk.key}`);
       }
       conn.action('character.update_dnd', { char_id: me.id, sheet: next });
       render();
