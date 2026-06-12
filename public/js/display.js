@@ -284,7 +284,10 @@
       function charCard(c, isTurn) {
         const dead = c.conditions.some((x) => x.kind === 'dead');
         const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
-        card.appendChild(el(`<strong>${isTurn ? '▶ ' : ''}${esc(c.name)}</strong>`));
+        const face = c.token_art
+          ? `<span style="display:inline-block;width:34px;height:34px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
+          : '';
+        card.appendChild(el(`<strong style="display:flex;align-items:center">${face}${isTurn ? '▶ ' : ''}${esc(c.name)}</strong>`));
         if (c.system === 'campfire') {
           const dice = el(`<div></div>`);
           const total = { green: 0, yellow: 0, blue: c.granted_blue };

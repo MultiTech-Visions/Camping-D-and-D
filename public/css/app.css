@@ -159,6 +159,23 @@ label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.
 .pip.on { background: var(--gold); border-color: var(--gold); }
 .pip.death-fail.on { background: var(--danger); border-color: var(--danger); }
 
+/* --- player sheet hero header: portrait token with lower-third name --- */
+.portrait-hero { display: flex; flex-direction: column; align-items: center; margin: 10px 0 4px; }
+.portrait-disc {
+  position: relative; width: 150px; height: 150px; border-radius: 50%;
+  background-size: cover; background-position: center; overflow: hidden;
+  border: 3px solid var(--ember-deep);
+  box-shadow: 0 0 26px rgba(255, 140, 46, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.portrait-disc .lower-third {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 26px 8px 12px; text-align: center;
+  font-weight: 700; font-size: 1.05rem; color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.88));
+  text-shadow: 0 1px 3px #000;
+}
+.portrait-sub { text-align: center; margin-top: 6px; }
+
 /* --- tabs --- */
 .tabs { display: flex; gap: 6px; margin: 14px 0; }
 .tabs button { flex: 1; border-radius: 10px 10px 0 0; border-bottom: 2px solid transparent; }

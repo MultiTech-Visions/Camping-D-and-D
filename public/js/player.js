@@ -538,13 +538,25 @@
 
   function headerSection(me) {
     const sys = me.system === 'campfire' ? '🔥' : '🐉';
-    const box = el(`<div class="card-head"><h2 style="margin-top:6px;border:none">${sys} ${esc(me.name)}</h2></div>`);
+    const wrap = el(`<div></div>`);
     const edit = el(`<button class="mini ghost" title="edit name, concept, token image">✏ edit</button>`);
     edit.onclick = () => { editorScreen = 'profile'; profilePendingArt = null; render(); };
-    box.appendChild(edit);
-    const sub = el(`<div class="muted">${esc(me.concept)}${me.flavor ? ` · <em>${esc(me.flavor)}</em>` : ''}</div>`);
-    const wrap = el(`<div></div>`);
-    wrap.append(box, sub);
+
+    if (me.token_art) {
+      // the hero treatment: your token, big, with a lower-third nameplate
+      const hero = el(`<div class="portrait-hero"></div>`);
+      hero.appendChild(el(`<div class="portrait-disc" style="background-image:url('${me.token_art}')">
+        <div class="lower-third">${sys} ${esc(me.name)}</div></div>`));
+      const sub = el(`<div class="portrait-sub muted">${esc(me.concept)}${me.flavor ? ` · <em>${esc(me.flavor)}</em>` : ''} </div>`);
+      sub.appendChild(edit);
+      hero.appendChild(sub);
+      wrap.appendChild(hero);
+    } else {
+      const box = el(`<div class="card-head"><h2 style="margin-top:6px;border:none">${sys} ${esc(me.name)}</h2></div>`);
+      box.appendChild(edit);
+      wrap.appendChild(box);
+      wrap.appendChild(el(`<div class="muted">${esc(me.concept)}${me.flavor ? ` · <em>${esc(me.flavor)}</em>` : ''}</div>`));
+    }
     return wrap;
   }
 
