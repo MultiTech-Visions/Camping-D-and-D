@@ -44,9 +44,57 @@
     return t.content.firstChild;
   }
 
+  // One shared condition editor: freeform names with quick-fill (built-in
+  // lists + everything the GM has used before), per-condition visibility,
+  // rename, delete. Subject = {char_id} or {entry_id}.
+  function conditionEditor(conditions, subject) {
+    const wrap = el(`<div></div>`);
+    for (const c of conditions) {
+      const secret = c.visibility === 'dm_only';
+      const row = el(`<div class="attr-row" style="padding:4px 0"></div>`);
+      row.appendChild(el(`<span class="small" style="flex:1;${secret ? 'color:var(--gold)' : ''}">${secret ? '🙈 ' : '⚑ '}${esc(c.kind)}</span>`));
+      const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
+      const eye = el(`<button class="mini ghost" title="${secret ? 'show to players + projector' : 'make GM-only'}">${secret ? '👁' : '🙈'}</button>`);
+      eye.onclick = () => conn.action('condition.update', { condition_id: c.id, visibility: secret ? 'visible' : 'dm_only' });
+      const edit = el(`<button class="mini ghost" title="rename">✎</button>`);
+      edit.onclick = () => {
+        const kind = prompt('Condition / note:', c.kind);
+        if (kind && kind.trim()) conn.action('condition.update', { condition_id: c.id, kind: kind.trim() });
+      };
+      const del = el(`<button class="mini danger ghost">✕</button>`);
+      del.onclick = () => conn.action('condition.remove', { condition_id: c.id });
+      ctl.append(eye, edit, del);
+      row.appendChild(ctl);
+      wrap.appendChild(row);
+    }
+    const add = el(`<div class="btn-row"></div>`);
+    const input = el(`<input type="text" list="cond-suggestions" placeholder="poisoned, +2 vs goblins, owes Mira…" maxlength="60" style="max-width:210px">`);
+    const vis = el(`<select style="max-width:110px"><option value="visible">visible</option><option value="dm_only">GM-only</option></select>`);
+    const btn = el(`<button class="mini">+ add</button>`);
+    const doAdd = () => {
+      if (!input.value.trim()) return;
+      conn.action('condition.add', { ...subject, kind: input.value.trim(), visibility: vis.value });
+      input.value = '';
+    };
+    btn.onclick = doAdd;
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') doAdd(); };
+    add.append(input, vis, btn);
+    wrap.appendChild(add);
+    return wrap;
+  }
+
+  let condOpenEntry = null; // custom initiative entry whose condition editor is expanded
+
   function render() {
     if (!snap) return;
     root.innerHTML = '';
+    // quick-fill source for every condition input on the page
+    const suggestions = [...new Set([
+      ...snap.used_conditions,
+      ...snap.config.CONDITIONS.campfire,
+      ...snap.config.CONDITIONS.dnd5e,
+    ])];
+    root.appendChild(el(`<datalist id="cond-suggestions">${suggestions.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>`));
     root.appendChild(encounterBar());
     root.appendChild(initiativeBoard());
     root.appendChild(clocksManager());
@@ -94,7 +142,9 @@
       const isTurn = snap.initiative.turn_id === e.id;
       const hidden = e.visibility === 'dm_only';
       const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}" ${hidden ? 'style="opacity:.65"' : ''}></div>`);
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}</span>`));
+      const condSummary = e.char_id === null && e.conditions.length > 0
+        ? ` <span class="muted small">${e.conditions.map((x) => `${x.visibility === 'dm_only' ? '🙈' : ''}${esc(x.kind)}`).join(' · ')}</span>` : '';
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}${condSummary}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
       const up = el(`<button class="mini" title="move up">↑</button>`);
       const down = el(`<button class="mini" title="move down">↓</button>`);
@@ -108,9 +158,20 @@
       down.onclick = () => reorder(i, i + 1);
       turn.onclick = () => conn.action('initiative.set_turn', { entry_id: e.id });
       out.onclick = () => conn.action('initiative.remove', { entry_id: e.id });
-      ctl.append(up, down, turn, eye, out);
+      if (e.char_id === null) {
+        const flag = el(`<button class="mini ${condOpenEntry === e.id ? 'primary' : 'ghost'}" title="conditions / notes on this entry">⚑</button>`);
+        flag.onclick = () => { condOpenEntry = condOpenEntry === e.id ? null : e.id; render(); };
+        ctl.append(up, down, turn, flag, eye, out);
+      } else {
+        ctl.append(up, down, turn, eye, out);
+      }
       row.appendChild(ctl);
       box.appendChild(row);
+      if (e.char_id === null && condOpenEntry === e.id) {
+        const condBox = el(`<div style="margin:0 0 6px 24px;border-left:2px solid var(--line);padding-left:10px"></div>`);
+        condBox.appendChild(conditionEditor(e.conditions, { entry_id: e.id }));
+        box.appendChild(condBox);
+      }
     }
 
     const foot = el(`<div class="btn-row"></div>`);
@@ -905,19 +966,8 @@
       card.appendChild(ctl);
     }
 
-    // conditions
-    const chips = el(`<div class="chips"></div>`);
-    for (const kind of snap.config.CONDITIONS[c.system]) {
-      const existing = c.conditions.find((x) => x.kind === kind);
-      const chip = el(`<span class="chip ${existing ? 'on' : ''} ${kind === 'dead' ? 'chip-dead' : ''}">${kind}</span>`);
-      chip.onclick = () => {
-        existing
-          ? conn.action('condition.remove', { condition_id: existing.id })
-          : conn.action('condition.add', { char_id: c.id, kind });
-      };
-      chips.appendChild(chip);
-    }
-    card.appendChild(chips);
+    // conditions / GM notes — freeform, per-entry visibility
+    card.appendChild(conditionEditor(c.conditions, { char_id: c.id }));
 
     const foot = el(`<div class="btn-row"></div>`);
     if (!snap.initiative.entries.some((e) => e.char_id === c.id)) {

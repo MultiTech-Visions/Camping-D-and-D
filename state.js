@@ -26,11 +26,13 @@ const state = {
   characters: new Map(),
   clocks: new Map(),
   initiative: { entries: [], turn_id: null },
+  entryConditions: new Map(), // entry_id -> [{id, kind, visibility}] for custom initiative entries
   maps: new Map(),
   tokens: new Map(),
   camera: null,
   camera_bookmarks: [],
   custom_colors: [], // GM's saved token colors ('#rrggbb'), persisted in runtime
+  used_conditions: [], // every condition name the GM has used — quick-fill suggestions
   // Reported by the display client so the GM minimap can draw the exact
   // projected rectangle. Memory-only: the display re-reports on reconnect.
   display_viewport: null,
@@ -85,10 +87,17 @@ function load() {
     });
   }
   for (const id of migratedSheets) persistCharacter(state.characters.get(id));
+  state.entryConditions.clear();
   for (const c of stmts.allConditions.all()) {
-    const char = state.characters.get(c.char_id);
-    R.assert(char, `corrupt DB: condition ${c.id} references missing character ${c.char_id}`);
-    char.conditions.push({ id: c.id, kind: c.kind });
+    if (c.char_id !== null) {
+      const char = state.characters.get(c.char_id);
+      R.assert(char, `corrupt DB: condition ${c.id} references missing character ${c.char_id}`);
+      char.conditions.push({ id: c.id, kind: c.kind, visibility: c.visibility });
+    } else if (!state.entryConditions.has(c.entry_id)) {
+      state.entryConditions.set(c.entry_id, [{ id: c.id, kind: c.kind, visibility: c.visibility }]);
+    } else {
+      state.entryConditions.get(c.entry_id).push({ id: c.id, kind: c.kind, visibility: c.visibility });
+    }
   }
 
   state.clocks.clear();
@@ -122,9 +131,18 @@ function load() {
     }
   }
 
+  // Sweep conditions whose custom initiative entry no longer exists.
+  for (const [entryId, conds] of [...state.entryConditions]) {
+    if (!state.initiative.entries.some((e) => e.id === entryId)) {
+      for (const c of conds) stmts.deleteCondition.run(c.id);
+      state.entryConditions.delete(entryId);
+    }
+  }
+
   state.camera = runtime.camera === undefined ? null : runtime.camera;
   state.camera_bookmarks = Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [];
   state.custom_colors = Array.isArray(runtime.custom_colors) ? runtime.custom_colors : [];
+  state.used_conditions = Array.isArray(runtime.used_conditions) ? runtime.used_conditions : [];
 
   if (state.game.active_map_id !== null && !state.maps.has(state.game.active_map_id)) {
     throw new Error(`corrupt DB: active_map_id ${state.game.active_map_id} references missing map`);
@@ -142,6 +160,7 @@ function persistRuntime() {
     camera: state.camera,
     camera_bookmarks: state.camera_bookmarks,
     custom_colors: state.custom_colors,
+    used_conditions: state.used_conditions,
   }));
 }
 
@@ -218,10 +237,29 @@ function assertCalibrationSane(row) {
 }
 
 function removeInitiativeEntries(predicate) {
+  for (const e of state.initiative.entries) {
+    if (predicate(e) && state.entryConditions.has(e.id)) {
+      stmts.deleteConditionsByEntry.run(e.id); // conditions die with their entry
+      state.entryConditions.delete(e.id);
+    }
+  }
   state.initiative.entries = state.initiative.entries.filter((e) => !predicate(e));
   if (!state.initiative.entries.some((e) => e.id === state.initiative.turn_id)) {
     state.initiative.turn_id = null;
   }
+}
+
+function findCondition(conditionId) {
+  R.assertInt(conditionId, 'condition_id');
+  for (const c of state.characters.values()) {
+    const cond = c.conditions.find((x) => x.id === conditionId);
+    if (cond) return { cond, list: c.conditions };
+  }
+  for (const list of state.entryConditions.values()) {
+    const cond = list.find((x) => x.id === conditionId);
+    if (cond) return { cond, list };
+  }
+  throw new R.RuleError(`no condition with id ${conditionId}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,23 +393,51 @@ const ops = {
     persistRuntime();
   },
 
+  // Conditions are freeform tags/notes (the built-in lists are just quick-fill
+  // suggestions). Subject is a character OR a custom initiative entry.
   'condition.add'(p) {
-    const c = getChar(p.char_id);
-    R.assertOneOf(p.kind, config.CONDITIONS[c.system], 'condition kind');
-    R.assert(!c.conditions.some((x) => x.kind === p.kind), `${c.name} already has condition '${p.kind}'`);
-    const info = stmts.insertCondition.run(c.id, p.kind);
-    c.conditions.push({ id: Number(info.lastInsertRowid), kind: p.kind });
+    const kind = R.assertNonEmptyString(p.kind, 'condition name');
+    R.assert(kind.length <= 60, 'condition name is too long (60 max)');
+    const visibility = p.visibility === undefined ? 'visible'
+      : R.assertOneOf(p.visibility, ['visible', 'dm_only'], 'visibility');
+    let list, charId = null, entryId = null;
+    if (p.entry_id !== undefined) {
+      R.assert(state.initiative.entries.some((e) => e.id === p.entry_id && e.char_id === null),
+        `no custom initiative entry '${p.entry_id}'`);
+      entryId = p.entry_id;
+      if (!state.entryConditions.has(entryId)) state.entryConditions.set(entryId, []);
+      list = state.entryConditions.get(entryId);
+    } else {
+      const c = getChar(p.char_id);
+      charId = c.id;
+      list = c.conditions;
+    }
+    R.assert(!list.some((x) => x.kind.toLowerCase() === kind.toLowerCase()),
+      `'${kind}' is already applied there`);
+    const info = stmts.insertCondition.run(charId, entryId, kind, visibility);
+    list.push({ id: Number(info.lastInsertRowid), kind, visibility });
+    // remember the name for quick-fill next time (newest first, capped)
+    state.used_conditions = [kind, ...state.used_conditions.filter((k) => k.toLowerCase() !== kind.toLowerCase())].slice(0, 60);
+    persistRuntime();
+  },
+
+  'condition.update'(p) {
+    const found = findCondition(p.condition_id);
+    if (p.kind !== undefined) {
+      const kind = R.assertNonEmptyString(p.kind, 'condition name');
+      R.assert(kind.length <= 60, 'condition name is too long (60 max)');
+      found.cond.kind = kind;
+    }
+    if (p.visibility !== undefined) {
+      found.cond.visibility = R.assertOneOf(p.visibility, ['visible', 'dm_only'], 'visibility');
+    }
+    stmts.updateCondition.run(found.cond.kind, found.cond.visibility, found.cond.id);
   },
 
   'condition.remove'(p) {
-    R.assertInt(p.condition_id, 'condition_id');
-    let owner = null;
-    for (const c of state.characters.values()) {
-      if (c.conditions.some((x) => x.id === p.condition_id)) { owner = c; break; }
-    }
-    R.assert(owner, `no condition with id ${p.condition_id}`);
-    stmts.deleteCondition.run(p.condition_id);
-    owner.conditions = owner.conditions.filter((x) => x.id !== p.condition_id);
+    const found = findCondition(p.condition_id);
+    stmts.deleteCondition.run(found.cond.id);
+    found.list.splice(found.list.indexOf(found.cond), 1);
   },
 
   // --- initiative: characters AND free-standing entries (monsters, hazards,
@@ -706,13 +772,16 @@ const ops = {
 // secrets never leave the process for the wrong role.
 // ---------------------------------------------------------------------------
 
-function publicCharacter(c, { includeHiddenDesire }) {
+function publicCharacter(c, { includeHiddenDesire, includeSecretConditions }) {
   const out = {
     id: c.id, system: c.system, name: c.name, concept: c.concept,
     flavor: c.flavor, gear: c.gear, notes: c.notes,
     encounters_done: c.encounters_done, pending_points: c.pending_points,
     drain: { ...c.drain }, granted_blue: c.granted_blue,
-    conditions: c.conditions.map((x) => ({ ...x })),
+    // dm_only conditions are the GM's private notes — even about your own character
+    conditions: c.conditions
+      .filter((x) => includeSecretConditions || x.visibility === 'visible')
+      .map((x) => ({ ...x })),
   };
   if (c.system === 'campfire') {
     out.brawn = c.brawn; out.constitution = c.constitution; out.magic = c.magic; out.wits = c.wits;
@@ -739,10 +808,16 @@ function snapshotFor(role, charId) {
     game: { reward_every_n_encounters: state.game.reward_every_n_encounters, active_map_id: state.game.active_map_id },
     initiative: {
       // dm_only entries (GM reminders, hidden threats) never reach players or
-      // the projector — filtered server-side like dm_only clocks.
+      // the projector — filtered server-side like dm_only clocks. Entry
+      // conditions ride along, with the same visibility filter.
       entries: state.initiative.entries
         .filter((e) => role === 'dm' || e.visibility === 'visible')
-        .map((e) => ({ ...e })),
+        .map((e) => ({
+          ...e,
+          conditions: (state.entryConditions.get(e.id) === undefined ? [] : state.entryConditions.get(e.id))
+            .filter((x) => role === 'dm' || x.visibility === 'visible')
+            .map((x) => ({ ...x })),
+        })),
       turn_id: state.initiative.turn_id,
     },
     map: activeMapRow,
@@ -766,24 +841,25 @@ function snapshotFor(role, charId) {
   if (role === 'dm') {
     return {
       ...base,
-      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true })),
+      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true, includeSecretConditions: true })),
       clocks: clocks.map((c) => ({ ...c })),
       maps: [...state.maps.values()].map((m) => ({ ...m })),
       camera_bookmarks: state.camera_bookmarks.map((b) => ({ ...b })),
       custom_colors: [...state.custom_colors],
+      used_conditions: [...state.used_conditions],
     };
   }
   if (role === 'player') {
     return {
       ...base,
-      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId })),
+      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
       clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
     };
   }
   // display: roster + visible clocks only; never hidden desires, never dm_only clocks.
   return {
     ...base,
-    characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false })),
+    characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false, includeSecretConditions: false })),
     clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
   };
 }

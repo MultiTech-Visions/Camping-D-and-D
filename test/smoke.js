@@ -174,13 +174,44 @@ check('dnd hp update validated whole-sheet', () => {
   throws(() => ops['character.update_dnd']({ char_id: wizardId, sheet: next }));
 });
 
-check('conditions per-system, no duplicates', () => {
+check('conditions: freeform names, edit, visibility, both subject kinds', () => {
+  const { snapshotFor } = require('../state');
+  // freeform names on characters; duplicates (case-insensitive) rejected
   ops['condition.add']({ char_id: heroId, kind: 'poisoned' });
-  throws(() => ops['condition.add']({ char_id: heroId, kind: 'poisoned' }));
-  throws(() => ops['condition.add']({ char_id: heroId, kind: 'grappled' })); // dnd-only kind
-  ops['condition.add']({ char_id: wizardId, kind: 'grappled' });
-  const cid = state.characters.get(heroId).conditions[0].id;
-  ops['condition.remove']({ condition_id: cid });
+  ops['condition.add']({ char_id: heroId, kind: '+2 vs goblins until dawn' });
+  throws(() => ops['condition.add']({ char_id: heroId, kind: 'Poisoned' }));
+  throws(() => ops['condition.add']({ char_id: heroId, kind: '   ' }));
+  assert.deepStrictEqual(state.used_conditions.slice(0, 2), ['+2 vs goblins until dawn', 'poisoned']);
+
+  // GM-only note on a character: dm sees it, the player does not
+  ops['condition.add']({ char_id: heroId, kind: 'secretly cursed', visibility: 'dm_only' });
+  const dmHero = snapshotFor('dm', null).characters.find((c) => c.id === heroId);
+  assert.ok(dmHero.conditions.some((x) => x.kind === 'secretly cursed'));
+  const ownHero = snapshotFor('player', heroId).characters.find((c) => c.id === heroId);
+  assert.ok(!ownHero.conditions.some((x) => x.kind === 'secretly cursed'), 'player saw a GM-only note!');
+
+  // edit: rename + flip visibility
+  const cursed = state.characters.get(heroId).conditions.find((x) => x.kind === 'secretly cursed');
+  ops['condition.update']({ condition_id: cursed.id, kind: 'visibly cursed', visibility: 'visible' });
+  assert.ok(snapshotFor('player', heroId).characters.find((c) => c.id === heroId)
+    .conditions.some((x) => x.kind === 'visibly cursed'));
+
+  // conditions on a custom initiative entry; removed with the entry
+  const ogre = ops['initiative.add_custom']({ label: 'Test Ogre' }).created_entry_id;
+  ops['condition.add']({ entry_id: ogre, kind: 'bloodied' });
+  ops['condition.add']({ entry_id: ogre, kind: 'regenerates', visibility: 'dm_only' });
+  throws(() => ops['condition.add']({ entry_id: 'custom:9999', kind: 'x' }));
+  const dmOgre = snapshotFor('dm', null).initiative.entries.find((e) => e.id === ogre);
+  assert.strictEqual(dmOgre.conditions.length, 2);
+  const shownOgre = snapshotFor('display', null).initiative.entries.find((e) => e.id === ogre);
+  assert.deepStrictEqual(shownOgre.conditions.map((x) => x.kind), ['bloodied'], 'projector saw a GM-only entry condition!');
+  ops['initiative.remove']({ entry_id: ogre });
+  assert.ok(!state.entryConditions.has(ogre), 'entry conditions survived entry removal');
+
+  // cleanup char conditions for later checks
+  for (const x of [...state.characters.get(heroId).conditions]) {
+    ops['condition.remove']({ condition_id: x.id });
+  }
   assert.strictEqual(state.characters.get(heroId).conditions.length, 0);
 });
 

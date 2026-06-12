@@ -36,10 +36,16 @@ CREATE TABLE IF NOT EXISTS character (
   dnd_sheet       TEXT    NOT NULL   -- JSON for dnd5e characters; '' for campfire
 );
 
+-- Conditions are freeform tags/notes on a subject: either a character or a
+-- custom initiative entry (monster, hazard…). dm_only ones are the GM's
+-- private bookkeeping and never reach players or the projector.
 CREATE TABLE IF NOT EXISTS condition_row (
-  id      INTEGER PRIMARY KEY,
-  char_id INTEGER NOT NULL REFERENCES character(id) ON DELETE CASCADE,
-  kind    TEXT    NOT NULL
+  id         INTEGER PRIMARY KEY,
+  char_id    INTEGER REFERENCES character(id) ON DELETE CASCADE,
+  entry_id   TEXT,                -- initiative entry id ('custom:N')
+  kind       TEXT    NOT NULL,
+  visibility TEXT    NOT NULL DEFAULT 'visible' CHECK (visibility IN ('visible','dm_only')),
+  CHECK ((char_id IS NULL) != (entry_id IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS clock (
@@ -98,6 +104,24 @@ CREATE TABLE IF NOT EXISTS runtime (
 `);
 
 // Migrations for databases created before these columns existed.
+// Conditions: the original table had char_id NOT NULL and no entry_id /
+// visibility — rebuild it (SQLite can't relax NOT NULL in place).
+if (!db.prepare(`PRAGMA table_info(condition_row)`).all().some((c) => c.name === 'entry_id')) {
+  db.exec(`
+    CREATE TABLE condition_row_new (
+      id         INTEGER PRIMARY KEY,
+      char_id    INTEGER REFERENCES character(id) ON DELETE CASCADE,
+      entry_id   TEXT,
+      kind       TEXT    NOT NULL,
+      visibility TEXT    NOT NULL DEFAULT 'visible' CHECK (visibility IN ('visible','dm_only')),
+      CHECK ((char_id IS NULL) != (entry_id IS NULL))
+    );
+    INSERT INTO condition_row_new (id, char_id, entry_id, kind, visibility)
+      SELECT id, char_id, NULL, kind, 'visible' FROM condition_row;
+    DROP TABLE condition_row;
+    ALTER TABLE condition_row_new RENAME TO condition_row;
+  `);
+}
 const mapCols = db.prepare(`PRAGMA table_info(map_calibration)`).all();
 if (!mapCols.some((c) => c.name === 'grid_visible')) {
   db.exec(`ALTER TABLE map_calibration ADD COLUMN grid_visible INTEGER NOT NULL DEFAULT 1`);
@@ -144,8 +168,10 @@ const stmts = {
   deleteCharacter: db.prepare(`DELETE FROM character WHERE id=?`),
   allCharacters: db.prepare(`SELECT * FROM character ORDER BY id`),
 
-  insertCondition: db.prepare(`INSERT INTO condition_row (char_id, kind) VALUES (?, ?)`),
+  insertCondition: db.prepare(`INSERT INTO condition_row (char_id, entry_id, kind, visibility) VALUES (?, ?, ?, ?)`),
+  updateCondition: db.prepare(`UPDATE condition_row SET kind=?, visibility=? WHERE id=?`),
   deleteCondition: db.prepare(`DELETE FROM condition_row WHERE id=?`),
+  deleteConditionsByEntry: db.prepare(`DELETE FROM condition_row WHERE entry_id=?`),
   allConditions: db.prepare(`SELECT * FROM condition_row ORDER BY id`),
 
   insertClock: db.prepare(`
