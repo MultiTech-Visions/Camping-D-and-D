@@ -140,7 +140,12 @@ function load() {
   }
 
   state.camera = runtime.camera === undefined ? null : runtime.camera;
-  state.camera_bookmarks = Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [];
+  // Bookmarks are per-map. Pre-map_id bookmarks migrate to the map that was
+  // active when we loaded; with no active map there's nothing they can belong
+  // to, so they're dropped. Bookmarks for deleted maps are swept.
+  state.camera_bookmarks = (Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [])
+    .map((b) => (b.map_id === undefined ? { ...b, map_id: game.active_map_id } : b))
+    .filter((b) => b.map_id !== null && state.maps.has(b.map_id));
   state.custom_colors = Array.isArray(runtime.custom_colors) ? runtime.custom_colors : [];
   state.used_conditions = Array.isArray(runtime.used_conditions) ? runtime.used_conditions : [];
 
@@ -169,7 +174,7 @@ function persistCharacter(c) {
     id: c.id, name: c.name, concept: c.concept, brawn: c.brawn, constitution: c.constitution,
     magic: c.magic, wits: c.wits, flavor: c.flavor, hidden_desire: c.hidden_desire,
     gear: c.gear, notes: c.notes, encounters_done: c.encounters_done,
-    pending_points: c.pending_points, system: c.system,
+    pending_points: c.pending_points, system: c.system, token_art: c.token_art,
     dnd_sheet: c.system === 'dnd5e' ? JSON.stringify(c.dnd_sheet) : '',
   });
 }
@@ -259,6 +264,14 @@ function assertFog(fog, map, name) {
   return fog;
 }
 
+// '' = no portrait; otherwise must be a genuinely uploaded token image.
+function assertTokenArt(value, name) {
+  R.assertString(value, name);
+  R.assert(value === '' || /^\/assets\/tokens\/[\w.-]+$/.test(value),
+    `${name} must be an uploaded token image path, got ${JSON.stringify(value)}`);
+  return value;
+}
+
 function assertHexColor(value, name) {
   R.assert(typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value),
     `${name} must be a '#rrggbb' color, got ${JSON.stringify(value)}`);
@@ -317,6 +330,7 @@ const ops = {
       notes: R.assertString(p.notes === undefined ? '' : p.notes, 'notes'),
       encounters_done: 0,
       pending_points: 0,
+      token_art: assertTokenArt(p.token_art === undefined ? '' : p.token_art, 'token_art'),
     };
     let row;
     if (system === 'campfire') {
@@ -340,10 +354,22 @@ const ops = {
 
   'character.update_sheet'(p) {
     const c = getChar(p.char_id);
+    if (p.name !== undefined) c.name = R.assertNonEmptyString(p.name, 'name');
+    if (p.concept !== undefined) c.concept = R.assertNonEmptyString(p.concept, 'concept');
     if (p.flavor !== undefined) c.flavor = R.assertString(p.flavor, 'flavor');
     if (p.gear !== undefined) c.gear = R.assertString(p.gear, 'gear');
     if (p.notes !== undefined) c.notes = R.assertString(p.notes, 'notes');
     if (p.hidden_desire !== undefined) c.hidden_desire = R.assertString(p.hidden_desire, 'hidden_desire');
+    if (p.token_art !== undefined) {
+      c.token_art = assertTokenArt(p.token_art, 'token_art');
+      // keep a live map token in step with the portrait
+      for (const t of state.tokens.values()) {
+        if (t.char_id === c.id) {
+          t.art = c.token_art === '' ? null : c.token_art;
+          stmts.updateToken.run(t);
+        }
+      }
+    }
     persistCharacter(c);
   },
 
@@ -738,6 +764,8 @@ const ops = {
     if (state.game.active_map_id === p.map_id) ops['map.set_active']({ map_id: null });
     stmts.deleteMap.run(p.map_id);
     state.maps.delete(p.map_id);
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.map_id !== p.map_id);
+    persistRuntime();
   },
 
   'token.create'(p) {
@@ -753,6 +781,7 @@ const ops = {
       h: p.h === undefined ? 1 : p.h,
       shape: p.shape === undefined ? config.TOKEN_DEFAULT_SHAPES[kind] : R.assertOneOf(p.shape, config.TOKEN_SHAPES, 'shape'),
       color: p.color === undefined ? config.TOKEN_DEFAULT_COLORS[kind] : assertHexColor(p.color, 'color'),
+      art: null, // set via token.set_art after upload
       glow_color: null, glow_radius: null, glow_pulse: null,
     };
     assertFootprintOnGrid(row.col, row.row, row.w, row.h, map);
@@ -761,6 +790,7 @@ const ops = {
       R.assert(![...state.tokens.values()].some((t) => t.char_id === c.id),
         `${c.name} already has a token on the map`);
       row.char_id = c.id;
+      if (c.token_art !== '') row.art = c.token_art; // the portrait follows the character
     }
     if (kind === 'glow') {
       row.glow_color = row.color; // the glow IS the color
@@ -773,6 +803,27 @@ const ops = {
     const id = Number(info.lastInsertRowid);
     state.tokens.set(id, { ...row, id });
     return { created_token_id: id };
+  },
+
+  // Attach uploaded art to a token (null clears it back to the colored shape).
+  'token.set_art'(p) {
+    const t = getToken(p.token_id);
+    R.assert(t.kind !== 'glow', 'glow tokens are pure light — no art');
+    if (p.art === null) {
+      t.art = null;
+    } else {
+      R.assertNonEmptyString(p.art, 'art');
+      R.assert(/^\/assets\/tokens\/[\w.-]+$/.test(p.art), `art must be an uploaded token image path, got ${JSON.stringify(p.art)}`);
+      t.art = p.art;
+    }
+    stmts.updateToken.run(t);
+    if (t.char_id !== null) {
+      // pc tokens mirror back to the character's portrait, so it survives the
+      // token being removed and re-placed next encounter
+      const c = getChar(t.char_id);
+      c.token_art = t.art === null ? '' : t.art;
+      persistCharacter(c);
+    }
   },
 
   'token.set_color'(p) {
@@ -838,18 +889,23 @@ const ops = {
     state.display_viewport = { width: p.width, height: p.height };
   },
 
+  // Saved views belong to the map they were framed on — a "throne room" view
+  // means nothing on the swamp map.
   'camera.save_bookmark'(p) {
     R.assert(state.camera, 'no camera to bookmark — activate a map first');
+    const mapId = state.game.active_map_id;
     const name = R.assertNonEmptyString(p.name, 'name');
-    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.name !== name);
-    state.camera_bookmarks.push({ name, ...state.camera });
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => !(b.name === name && b.map_id === mapId));
+    state.camera_bookmarks.push({ name, map_id: mapId, ...state.camera });
     persistRuntime();
   },
 
   'camera.delete_bookmark'(p) {
+    const mapId = state.game.active_map_id;
     const name = R.assertNonEmptyString(p.name, 'name');
-    R.assert(state.camera_bookmarks.some((b) => b.name === name), `no bookmark named '${name}'`);
-    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.name !== name);
+    R.assert(state.camera_bookmarks.some((b) => b.name === name && b.map_id === mapId),
+      `no bookmark named '${name}' on the active map`);
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => !(b.name === name && b.map_id === mapId));
     persistRuntime();
   },
 
@@ -880,7 +936,7 @@ const ops = {
 function publicCharacter(c, { includeHiddenDesire, includeSecretConditions }) {
   const out = {
     id: c.id, system: c.system, name: c.name, concept: c.concept,
-    flavor: c.flavor, gear: c.gear, notes: c.notes,
+    flavor: c.flavor, gear: c.gear, notes: c.notes, token_art: c.token_art,
     encounters_done: c.encounters_done, pending_points: c.pending_points,
     drain: { ...c.drain }, granted_blue: c.granted_blue,
     // dm_only conditions are the GM's private notes — even about your own character
@@ -956,7 +1012,10 @@ function snapshotFor(role, charId) {
       characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true, includeSecretConditions: true })),
       clocks: clocks.map((c) => ({ ...c })),
       maps: [...state.maps.values()].map((m) => ({ ...m })),
-      camera_bookmarks: state.camera_bookmarks.map((b) => ({ ...b })),
+      // only the active map's saved views — a view is meaningless elsewhere
+      camera_bookmarks: state.camera_bookmarks
+        .filter((b) => b.map_id === state.game.active_map_id)
+        .map((b) => ({ ...b })),
       custom_colors: [...state.custom_colors],
       used_conditions: [...state.used_conditions],
     };

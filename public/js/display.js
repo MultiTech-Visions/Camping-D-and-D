@@ -242,16 +242,40 @@
       } else {
         disc.lineStyle(2, 0x000000, 0.8);
       }
-      if (tok.shape === 'square') {
+      if (tok.art) {
+        // uploaded art: cover-fit the footprint, masked to the token's shape,
+        // with the ring (turn highlight / outline) drawn on top
+        const spr = PIXI.Sprite.from(tok.art);
+        spr.anchor.set(0.5);
+        const fitArt = () => {
+          const tw = spr.texture.width, th = spr.texture.height;
+          const sc = Math.max(fw / tw, fh / th);
+          spr.width = tw * sc;
+          spr.height = th * sc;
+        };
+        if (spr.texture.baseTexture.valid) fitArt();
+        else spr.texture.baseTexture.once('loaded', fitArt);
+        const mask = new PIXI.Graphics();
+        mask.beginFill(0xffffff);
+        if (tok.shape === 'square') mask.drawRoundedRect(-fw / 2, -fh / 2, fw, fh, map.cell_size * 0.12);
+        else mask.drawEllipse(0, 0, fw * 0.48, fh * 0.48);
+        mask.endFill();
+        spr.mask = mask;
+        if (dead) spr.tint = 0x666666;
+        holder.addChild(spr, mask);
+        if (tok.shape === 'square') disc.drawRoundedRect(-fw / 2, -fh / 2, fw, fh, map.cell_size * 0.12);
+        else disc.drawEllipse(0, 0, fw * 0.48, fh * 0.48);
+      } else if (tok.shape === 'square') {
         // squares fill their cells (terrain): edge-to-edge, slightly translucent
         disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.8);
         disc.drawRoundedRect(-fw / 2, -fh / 2, fw, fh, map.cell_size * 0.12);
+        disc.endFill();
       } else {
         // circles sit inside the footprint (creatures); 1x1 stays the classic disc
         disc.beginFill(hexToNum(tok.color), dead ? 0.35 : 0.95);
         disc.drawEllipse(0, 0, fw * 0.4, fh * 0.4);
+        disc.endFill();
       }
-      disc.endFill();
       holder.addChild(disc);
 
       const label = new PIXI.Text(dead ? '✕ ' + tok.label : tok.label, {
@@ -340,7 +364,10 @@
       function charCard(c, isTurn) {
         const dead = c.conditions.some((x) => x.kind === 'dead');
         const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
-        card.appendChild(el(`<strong>${isTurn ? '▶ ' : ''}${esc(c.name)}</strong>`));
+        const face = c.token_art
+          ? `<span style="display:inline-block;width:34px;height:34px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
+          : '';
+        card.appendChild(el(`<strong style="display:flex;align-items:center">${face}${isTurn ? '▶ ' : ''}${esc(c.name)}</strong>`));
         if (c.system === 'campfire') {
           const dice = el(`<div></div>`);
           const total = { green: 0, yellow: 0, blue: c.granted_blue };
