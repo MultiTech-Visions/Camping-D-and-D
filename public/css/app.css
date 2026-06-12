@@ -195,6 +195,24 @@ table.rules th { background: var(--bg-raised); color: var(--gold); }
 
 /* --- display (projector) page --- */
 body.display-mode { overflow: hidden; font-size: 1.15rem; }
+/* clocks must read from across the campsite: card-style box, bigger bold text */
+body.display-mode .clock-box {
+  background: rgba(31, 24, 19, 0.92);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+body.display-mode .clock-label {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  max-width: 220px;
+}
+body.display-mode .clock-kind {
+  font-size: 16px;
+  font-weight: 700;
+}
 .display-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; height: 100vh; padding: 18px; }
 .display-main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
 .display-roster { overflow-y: auto; }
