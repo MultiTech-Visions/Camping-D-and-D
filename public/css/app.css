@@ -49,14 +49,10 @@ a { color: var(--ember); }
 /* --- header / nav --- */
 .site-head { text-align: center; padding-top: 10px; }
 .site-head .flame { font-size: 2.2rem; filter: drop-shadow(0 0 12px rgba(255, 140, 46, 0.6)); }
-.nav {
-  display: flex; gap: 6px; justify-content: center; flex-wrap: nowrap; margin: 12px 0;
-  overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px;
-}
+.nav { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
 .nav a {
   text-decoration: none; color: var(--ink-dim); border: 1px solid var(--line);
   border-radius: 999px; padding: 6px 14px; font-size: 0.9rem; background: var(--bg-card);
-  white-space: nowrap; flex-shrink: 0;
 }
 .nav a.active, .nav a:hover { color: var(--ember); border-color: var(--ember-deep); }
 
