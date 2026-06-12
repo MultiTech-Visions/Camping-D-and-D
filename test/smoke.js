@@ -400,6 +400,20 @@ check('token size + shape: footprints, bounds, resize clamping', () => {
   ops['token.delete']({ token_id: wall });
 });
 
+check('token art: uploaded-path rails, clearable, no art on glows', () => {
+  const drake = ops['token.create']({ label: 'Dragon', kind: 'monster', col: 4, row: 4, w: 3, h: 3 }).created_token_id;
+  ops['token.set_art']({ token_id: drake, art: '/assets/tokens/token-123.png' });
+  assert.strictEqual(state.tokens.get(drake).art, '/assets/tokens/token-123.png');
+  throws(() => ops['token.set_art']({ token_id: drake, art: '/etc/passwd' }));
+  throws(() => ops['token.set_art']({ token_id: drake, art: '/assets/maps/sneaky.png' }));
+  ops['token.set_art']({ token_id: drake, art: null });
+  assert.strictEqual(state.tokens.get(drake).art, null);
+  const torch = ops['token.create']({ label: 'Torch', kind: 'glow', col: 1, row: 1, glow_radius: 2, glow_pulse: 1 }).created_token_id;
+  throws(() => ops['token.set_art']({ token_id: torch, art: '/assets/tokens/token-1.png' }));
+  ops['token.delete']({ token_id: drake });
+  ops['token.delete']({ token_id: torch });
+});
+
 check('display viewport report (for the GM minimap projection box)', () => {
   ops['display.report_viewport']({ width: 1920, height: 1080 });
   assert.deepStrictEqual(state.display_viewport, { width: 1920, height: 1080 });

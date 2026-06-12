@@ -63,6 +63,20 @@ app.post('/upload/map',
     res.json({ image_path: `/assets/maps/${name}`, image_w: w, image_h: h });
   });
 
+// Token art upload: same raw-bytes scheme; the sprite is sized by the token's
+// footprint so no dimensions are needed.
+app.post('/upload/token',
+  express.raw({ type: Object.keys(UPLOAD_TYPES), limit: 10 * 1024 * 1024 }),
+  (req, res) => {
+    const ext = UPLOAD_TYPES[req.headers['content-type']];
+    if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
+    const name = `token-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
+    log(`token art uploaded: ${name} (${req.body.length} bytes)`);
+    res.json({ art: `/assets/tokens/${name}` });
+  });
+
 const server = http.createServer(app);
 const wss = ws.attach(server, log);
 

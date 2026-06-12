@@ -648,6 +648,7 @@ const ops = {
       h: p.h === undefined ? 1 : p.h,
       shape: p.shape === undefined ? config.TOKEN_DEFAULT_SHAPES[kind] : R.assertOneOf(p.shape, config.TOKEN_SHAPES, 'shape'),
       color: p.color === undefined ? config.TOKEN_DEFAULT_COLORS[kind] : assertHexColor(p.color, 'color'),
+      art: null, // set via token.set_art after upload
       glow_color: null, glow_radius: null, glow_pulse: null,
     };
     assertFootprintOnGrid(row.col, row.row, row.w, row.h, map);
@@ -668,6 +669,20 @@ const ops = {
     const id = Number(info.lastInsertRowid);
     state.tokens.set(id, { ...row, id });
     return { created_token_id: id };
+  },
+
+  // Attach uploaded art to a token (null clears it back to the colored shape).
+  'token.set_art'(p) {
+    const t = getToken(p.token_id);
+    R.assert(t.kind !== 'glow', 'glow tokens are pure light — no art');
+    if (p.art === null) {
+      t.art = null;
+    } else {
+      R.assertNonEmptyString(p.art, 'art');
+      R.assert(/^\/assets\/tokens\/[\w.-]+$/.test(p.art), `art must be an uploaded token image path, got ${JSON.stringify(p.art)}`);
+      t.art = p.art;
+    }
+    stmts.updateToken.run(t);
   },
 
   'token.set_color'(p) {

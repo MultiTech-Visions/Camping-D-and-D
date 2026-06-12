@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS token (
   h           INTEGER NOT NULL DEFAULT 1,
   shape       TEXT    NOT NULL DEFAULT 'circle' CHECK (shape IN ('circle','square')),
   color       TEXT    NOT NULL,    -- '#rrggbb' disc color (mirrors glow_color for glows)
+  art         TEXT,                -- uploaded image path; null = plain colored shape
   glow_color  TEXT,
   glow_radius REAL,
   glow_pulse  REAL
@@ -135,6 +136,9 @@ if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'w')) {
   db.exec(`ALTER TABLE token ADD COLUMN h INTEGER NOT NULL DEFAULT 1`);
   db.exec(`ALTER TABLE token ADD COLUMN shape TEXT NOT NULL DEFAULT 'circle'`);
   db.exec(`UPDATE token SET shape = 'square' WHERE kind = 'terrain'`);
+}
+if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'art')) {
+  db.exec(`ALTER TABLE token ADD COLUMN art TEXT`);
 }
 if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'color')) {
   db.exec(`ALTER TABLE token ADD COLUMN color TEXT NOT NULL DEFAULT ''`);
@@ -196,12 +200,12 @@ const stmts = {
   allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
 
   insertToken: db.prepare(`
-    INSERT INTO token (label, kind, char_id, col, row, w, h, shape, color, glow_color, glow_radius, glow_pulse)
-    VALUES (@label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @glow_color, @glow_radius, @glow_pulse)`),
+    INSERT INTO token (label, kind, char_id, col, row, w, h, shape, color, art, glow_color, glow_radius, glow_pulse)
+    VALUES (@label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @art, @glow_color, @glow_radius, @glow_pulse)`),
   updateToken: db.prepare(`
     UPDATE token SET label=@label, kind=@kind, char_id=@char_id, col=@col, row=@row,
       w=@w, h=@h, shape=@shape,
-      color=@color, glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
+      color=@color, art=@art, glow_color=@glow_color, glow_radius=@glow_radius, glow_pulse=@glow_pulse WHERE id=@id`),
   deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
   allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 

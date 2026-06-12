@@ -527,7 +527,10 @@
       const top = ((map.offset_y + t.row * map.cell_size) / map.image_h) * 100;
       const wPct = ((t.w * map.cell_size) / map.image_w) * 100;
       const hPct = ((t.h * map.cell_size) / map.image_h) * 100;
-      const tok = el(`<div style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;border-radius:${t.shape === 'square' ? '12%' : '50%'};background:${color};opacity:.85;border:1px solid #000"></div>`);
+      const fill = t.art
+        ? `background-image:url('${t.art}');background-size:cover;background-position:center`
+        : `background:${color}`;
+      const tok = el(`<div style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;border-radius:${t.shape === 'square' ? '12%' : '50%'};${fill};opacity:${t.art ? 1 : 0.85};border:1px solid #000"></div>`);
       viewer.tokenLayer.appendChild(tok);
       viewer.tokenLayer.appendChild(el(`<div style="position:absolute;left:${left + wPct / 2}%;top:${top + hPct}%;transform:translateX(-50%);color:#fff;font-size:9px;text-shadow:0 1px 2px #000;white-space:nowrap">${esc(t.label)}</div>`));
     }

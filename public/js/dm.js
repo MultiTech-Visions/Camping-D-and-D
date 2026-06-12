@@ -543,7 +543,10 @@
       const top = ((map.offset_y + t.row * map.cell_size) / map.image_h) * 100;
       const wPct = ((t.w * map.cell_size) / map.image_w) * 100;
       const hPct = ((t.h * map.cell_size) / map.image_h) * 100;
-      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;min-width:8px;min-height:8px;border-radius:${t.shape === 'square' ? '15%' : '50%'};background:${dotColor};border:2px solid ${selected ? 'var(--ember)' : '#000'};${selected ? 'box-shadow:0 0 8px var(--ember);' : ''}opacity:.92;pointer-events:none;z-index:2"></div>`));
+      const miniFill = t.art
+        ? `background-image:url('${t.art}');background-size:cover;background-position:center`
+        : `background:${dotColor}`;
+      mini.appendChild(el(`<div title="${esc(t.label)}" style="position:absolute;left:${left}%;top:${top}%;width:${wPct}%;height:${hPct}%;min-width:8px;min-height:8px;border-radius:${t.shape === 'square' ? '15%' : '50%'};${miniFill};border:2px solid ${selected ? 'var(--ember)' : '#000'};${selected ? 'box-shadow:0 0 8px var(--ember);' : ''}opacity:.92;pointer-events:none;z-index:2"></div>`));
     }
 
     // What the projector is actually showing: the real viewport rectangle,
@@ -822,8 +825,11 @@
       const selected = mapUI.selectedToken === t.id;
       const dotColor = t.kind === 'glow' ? t.glow_color : t.color;
       const row = el(`<div class="attr-row" style="cursor:pointer${selected ? ';background:rgba(255,140,46,.08)' : ''}"></div>`);
+      const dotFill = t.art
+        ? `background-image:url('${t.art}');background-size:cover;background-position:center`
+        : `background:${dotColor}`;
       row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">
-        <span style="display:inline-block;width:14px;height:14px;border-radius:${t.shape === 'square' ? '3px' : '50%'};background:${dotColor};border:1px solid #000;vertical-align:middle"></span>
+        <span style="display:inline-block;width:18px;height:18px;border-radius:${t.shape === 'square' ? '3px' : '50%'};${dotFill};border:1px solid #000;vertical-align:middle"></span>
         ${icons[t.kind]} ${esc(t.label)} <span class="muted small">(${t.col},${t.row})${t.w > 1 || t.h > 1 ? ` ${t.w}×${t.h}` : ''}</span></span>`));
       row.onclick = () => {
         mapUI.selectedToken = selected ? null : t.id;
@@ -860,7 +866,31 @@
         };
         const del = el(`<button class="mini danger ghost">✕</button>`);
         del.onclick = (ev) => { ev.stopPropagation(); mapUI.selectedToken = null; conn.action('token.delete', { token_id: t.id }); };
-        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, resize, del);
+        pad.append(mv(-1, 0, '◀'), mv(0, -1, '▲'), mv(0, 1, '▼'), mv(1, 0, '▶'), paint, resize);
+        if (t.kind !== 'glow') {
+          const artFile = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
+          const artBtn = el(`<button class="mini ghost" title="${t.art ? 'replace this token’s image' : 'use an image for this token (a 3x3 dragon deserves a dragon)'}">🖼</button>`);
+          artBtn.onclick = (ev) => { ev.stopPropagation(); artFile.click(); };
+          artFile.onclick = (ev) => ev.stopPropagation();
+          artFile.onchange = async () => {
+            const file = artFile.files[0];
+            if (!file) return;
+            conn.toast('Uploading token art…', true);
+            const res = await fetch('/upload/token', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+            if (!res.ok) {
+              conn.toast(`upload failed: ${(await res.json()).error}`, false);
+              return;
+            }
+            conn.action('token.set_art', { token_id: t.id, art: (await res.json()).art });
+          };
+          pad.append(artBtn, artFile);
+          if (t.art) {
+            const clearArt = el(`<button class="mini ghost" title="remove the image (back to a colored shape)">🚫</button>`);
+            clearArt.onclick = (ev) => { ev.stopPropagation(); conn.action('token.set_art', { token_id: t.id, art: null }); };
+            pad.appendChild(clearArt);
+          }
+        }
+        pad.appendChild(del);
         row.appendChild(pad);
       }
       box.appendChild(row);
