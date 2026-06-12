@@ -140,7 +140,12 @@ function load() {
   }
 
   state.camera = runtime.camera === undefined ? null : runtime.camera;
-  state.camera_bookmarks = Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [];
+  // Bookmarks are per-map. Pre-map_id bookmarks migrate to the map that was
+  // active when we loaded; with no active map there's nothing they can belong
+  // to, so they're dropped. Bookmarks for deleted maps are swept.
+  state.camera_bookmarks = (Array.isArray(runtime.camera_bookmarks) ? runtime.camera_bookmarks : [])
+    .map((b) => (b.map_id === undefined ? { ...b, map_id: game.active_map_id } : b))
+    .filter((b) => b.map_id !== null && state.maps.has(b.map_id));
   state.custom_colors = Array.isArray(runtime.custom_colors) ? runtime.custom_colors : [];
   state.used_conditions = Array.isArray(runtime.used_conditions) ? runtime.used_conditions : [];
 
@@ -654,6 +659,8 @@ const ops = {
     if (state.game.active_map_id === p.map_id) ops['map.set_active']({ map_id: null });
     stmts.deleteMap.run(p.map_id);
     state.maps.delete(p.map_id);
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.map_id !== p.map_id);
+    persistRuntime();
   },
 
   'token.create'(p) {
@@ -777,18 +784,23 @@ const ops = {
     state.display_viewport = { width: p.width, height: p.height };
   },
 
+  // Saved views belong to the map they were framed on — a "throne room" view
+  // means nothing on the swamp map.
   'camera.save_bookmark'(p) {
     R.assert(state.camera, 'no camera to bookmark — activate a map first');
+    const mapId = state.game.active_map_id;
     const name = R.assertNonEmptyString(p.name, 'name');
-    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.name !== name);
-    state.camera_bookmarks.push({ name, ...state.camera });
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => !(b.name === name && b.map_id === mapId));
+    state.camera_bookmarks.push({ name, map_id: mapId, ...state.camera });
     persistRuntime();
   },
 
   'camera.delete_bookmark'(p) {
+    const mapId = state.game.active_map_id;
     const name = R.assertNonEmptyString(p.name, 'name');
-    R.assert(state.camera_bookmarks.some((b) => b.name === name), `no bookmark named '${name}'`);
-    state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.name !== name);
+    R.assert(state.camera_bookmarks.some((b) => b.name === name && b.map_id === mapId),
+      `no bookmark named '${name}' on the active map`);
+    state.camera_bookmarks = state.camera_bookmarks.filter((b) => !(b.name === name && b.map_id === mapId));
     persistRuntime();
   },
 
@@ -888,7 +900,10 @@ function snapshotFor(role, charId) {
       characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true, includeSecretConditions: true })),
       clocks: clocks.map((c) => ({ ...c })),
       maps: [...state.maps.values()].map((m) => ({ ...m })),
-      camera_bookmarks: state.camera_bookmarks.map((b) => ({ ...b })),
+      // only the active map's saved views — a view is meaningless elsewhere
+      camera_bookmarks: state.camera_bookmarks
+        .filter((b) => b.map_id === state.game.active_map_id)
+        .map((b) => ({ ...b })),
       custom_colors: [...state.custom_colors],
       used_conditions: [...state.used_conditions],
     };
