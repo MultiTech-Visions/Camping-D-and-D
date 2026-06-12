@@ -16,8 +16,9 @@ window.CampfireMapViewer = (function () {
     return d.innerHTML;
   }
 
-  // open({ bottomEl?, onClose? }) -> { update(snap, {highlight?}), close() }
-  function open({ bottomEl, onClose } = {}) {
+  // open({ bottomEl?, onClose?, onZoomChange? })
+  //   -> { update(snap, {highlight?}), close(), setTapMode(fn), setZoom(s), getZoom() }
+  function open({ bottomEl, onClose, onZoomChange } = {}) {
     const overlay = el(`<div style="position:fixed;inset:0;background:#0c0906;z-index:60;display:flex;flex-direction:column"></div>`);
     const viewport = el(`<div style="flex:1;position:relative;overflow:hidden;touch-action:none"></div>`);
     const holder = el(`<div style="position:absolute;left:0;top:0;transform-origin:0 0"></div>`);
@@ -38,6 +39,7 @@ window.CampfireMapViewer = (function () {
     const v = { scale: 1, tx: 0, ty: 0, imagePath: null, focused: false };
     const apply = () => {
       holder.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+      if (onZoomChange) onZoomChange(v.scale);
     };
     const clampView = () => {
       const vw = viewport.clientWidth, vh = viewport.clientHeight;
@@ -174,7 +176,18 @@ window.CampfireMapViewer = (function () {
       viewport.style.outlineOffset = '-3px';
     }
 
-    return { update, close, setTapMode };
+    // setZoom(s): zoom around the center of the viewport (for external sliders)
+    function setZoom(scale) {
+      const cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2;
+      const world = { x: (cx - v.tx) / v.scale, y: (cy - v.ty) / v.scale };
+      v.scale = Math.min(10, Math.max(1, scale));
+      v.tx = cx - world.x * v.scale;
+      v.ty = cy - world.y * v.scale;
+      clampView();
+      apply();
+    }
+
+    return { update, close, setTapMode, setZoom, getZoom: () => v.scale };
   }
 
   return { open };

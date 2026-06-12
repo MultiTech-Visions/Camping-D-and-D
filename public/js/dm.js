@@ -131,10 +131,22 @@
     pad.append(el(`<span></span>`), mv(0, -1, '▲'), el(`<span></span>`),
       mv(-1, 0, '◀'), tapBtn, mv(1, 0, '▶'),
       el(`<span></span>`), mv(0, 1, '▼'), el(`<span></span>`));
-    wrap.appendChild(pad);
+
+    // vertical zoom slider on the right: the whole popup runs on one thumb —
+    // pan, zoom, 🎯 place, fine arrows
+    const zoomWrap = el(`<div style="display:flex;flex-direction:column;align-items:center;gap:4px"></div>`);
+    const zoomSlider = el(`<input type="range" min="1" max="10" step="0.1" value="1"
+      style="writing-mode:vertical-lr;direction:rtl;-webkit-appearance:slider-vertical;width:44px;height:180px">`);
+    zoomSlider.oninput = () => { if (tokenMover) tokenMover.setZoom(Number(zoomSlider.value)); };
+    zoomWrap.append(el(`<span class="muted small">🔎+</span>`), zoomSlider, el(`<span class="muted small">🔎−</span>`));
+
+    const controls = el(`<div style="display:flex;align-items:center;justify-content:center;gap:22px"></div>`);
+    controls.append(pad, zoomWrap);
+    wrap.appendChild(controls);
     tokenMover = CampfireMapViewer.open({
       bottomEl: wrap,
       onClose: () => { tokenMover = null; tokenMoverId = null; tokenMoverInfo = null; tokenMoverTapOn = false; },
+      onZoomChange: (s) => { zoomSlider.value = s; }, // pinch keeps the slider honest
     });
     updateTokenMover();
   }
