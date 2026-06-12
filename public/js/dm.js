@@ -138,13 +138,16 @@
       const e = entries[i];
       const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
       const name = c ? c.name : e.label;
-      const icon = c ? (c.system === 'campfire' ? '🔥' : '🐉') : '👹';
+      // characters show their portrait (no emoji clutter); customs keep 👹
+      const face = c && c.token_art
+        ? `<span style="display:inline-block;width:30px;height:30px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
+        : (c ? '' : '👹 ');
       const isTurn = snap.initiative.turn_id === e.id;
       const hidden = e.visibility === 'dm_only';
       const row = el(`<div class="attr-row ${isTurn ? 'turn-active' : ''}" ${hidden ? 'style="opacity:.65"' : ''}></div>`);
       const condSummary = e.char_id === null && e.conditions.length > 0
         ? ` <span class="muted small">${e.conditions.map((x) => `${x.visibility === 'dm_only' ? '🙈' : ''}${esc(x.kind)}`).join(' · ')}</span>` : '';
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1">${isTurn ? '▶ ' : ''}${icon} ${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}${condSummary}</span>`));
+      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1;display:flex;align-items:center;flex-wrap:wrap">${isTurn ? '▶ ' : ''}${face}${esc(name)}${hidden ? ' <span class="small" style="color:var(--gold)">🙈 GM-only</span>' : ''}${condSummary}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
       const up = el(`<button class="mini" title="move up">↑</button>`);
       const down = el(`<button class="mini" title="move down">↓</button>`);
@@ -175,14 +178,6 @@
     }
 
     const foot = el(`<div class="btn-row"></div>`);
-    if (entries.length > 0) {
-      const next = el(`<button>⏭ Next turn</button>`);
-      next.onclick = () => {
-        const idx = entries.findIndex((e) => e.id === snap.initiative.turn_id);
-        conn.action('initiative.set_turn', { entry_id: entries[(idx + 1) % entries.length].id });
-      };
-      foot.appendChild(next);
-    }
     const addSel = el(`<select style="max-width:170px"></select>`);
     for (const c of snap.characters) {
       if (!entries.some((e) => e.char_id === c.id)) {
@@ -209,6 +204,16 @@
     customIn.onkeydown = (ev) => { if (ev.key === 'Enter') addCustom(); };
     customRow.append(customIn, customBtn);
     box.appendChild(customRow);
+
+    // the big one lives at the very bottom, out of the way and easy to thumb
+    if (entries.length > 0) {
+      const next = el(`<button style="width:100%;margin-top:10px">⏭ Next turn</button>`);
+      next.onclick = () => {
+        const idx = entries.findIndex((e) => e.id === snap.initiative.turn_id);
+        conn.action('initiative.set_turn', { entry_id: entries[(idx + 1) % entries.length].id });
+      };
+      box.appendChild(next);
+    }
     return box;
 
     function reorder(from, to) {
@@ -925,11 +930,10 @@
     const dead = c.conditions.some((x) => x.kind === 'dead');
     const isTurn = snap.initiative.turn_id === `char:${c.id}`;
     const card = el(`<div class="card ${dead ? 'is-dead' : ''} ${isTurn ? 'turn-active' : ''}"></div>`);
-    const sys = c.system === 'campfire' ? '🔥' : '🐉';
     const face = c.token_art
       ? `<span style="display:inline-block;width:38px;height:38px;border-radius:50%;background-image:url('${c.token_art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
       : '';
-    card.appendChild(el(`<div class="card-head"><h3 style="display:flex;align-items:center">${face}${sys} ${esc(c.name)}</h3><span class="muted small">${esc(c.concept)}</span></div>`));
+    card.appendChild(el(`<div class="card-head"><h3 style="display:flex;align-items:center">${face}${esc(c.name)}</h3><span class="muted small">${esc(c.concept)}</span></div>`));
     if (c.hidden_desire) {
       card.appendChild(el(`<p class="small" style="color:var(--gold)">🤫 ${esc(c.hidden_desire)}</p>`));
     }

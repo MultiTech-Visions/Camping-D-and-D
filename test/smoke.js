@@ -400,6 +400,24 @@ check('token size + shape: footprints, bounds, resize clamping', () => {
   ops['token.delete']({ token_id: wall });
 });
 
+check('camera bookmarks are per-map', () => {
+  const { snapshotFor } = require('../state');
+  ops['camera.save_bookmark']({ name: 'throne room' });
+  const mapB = ops['map.calibrate']({
+    name: 'Swamp', image_path: '/assets/maps/swamp.png', image_w: 500, image_h: 500,
+    cell_size: 50, offset_x: 0, offset_y: 0,
+  }).created_map_id; // calibrating activates the swamp
+  assert.strictEqual(snapshotFor('dm', null).camera_bookmarks.length, 0, 'throne-room view leaked onto the swamp map');
+  throws(() => ops['camera.delete_bookmark']({ name: 'throne room' })); // not on this map
+  ops['camera.save_bookmark']({ name: 'gator nest' });
+  assert.deepStrictEqual(snapshotFor('dm', null).camera_bookmarks.map((b) => b.name), ['gator nest']);
+  ops['map.set_active']({ map_id: mapId });
+  assert.deepStrictEqual(snapshotFor('dm', null).camera_bookmarks.map((b) => b.name), ['throne room']);
+  ops['map.delete']({ map_id: mapB }); // takes its bookmarks with it
+  assert.ok(!state.camera_bookmarks.some((b) => b.map_id === mapB));
+  ops['camera.delete_bookmark']({ name: 'throne room' });
+});
+
 check('profile edit + portrait: name/concept update, art flows to pc token', () => {
   ops['character.update_sheet']({ char_id: heroId, name: 'Tharn the Renamed', concept: 'storm-priest, reformed' });
   assert.strictEqual(state.characters.get(heroId).name, 'Tharn the Renamed');
