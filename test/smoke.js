@@ -406,6 +406,10 @@ check('profile edit + portrait: name/concept update, art flows to pc token', () 
   throws(() => ops['character.update_sheet']({ char_id: heroId, name: '  ' })); // can't blank a name
   throws(() => ops['character.update_sheet']({ char_id: heroId, token_art: 'http://evil/x.png' }));
 
+  // clear the hero token left on the board by the earlier grid checks
+  const leftover = [...state.tokens.values()].find((t) => t.char_id === heroId);
+  if (leftover) ops['token.delete']({ token_id: leftover.id });
+
   // portrait set at character level → a freshly placed pc token wears it
   ops['character.update_sheet']({ char_id: heroId, token_art: '/assets/tokens/token-hero.png' });
   const tok = ops['token.create']({ label: 'Tharn', kind: 'pc', char_id: heroId, col: 0, row: 0 }).created_token_id;
