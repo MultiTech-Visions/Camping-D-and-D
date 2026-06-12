@@ -16,8 +16,9 @@ window.CampfireMapViewer = (function () {
     return d.innerHTML;
   }
 
-  // open({ bottomEl?, onClose? }) -> { update(snap, {highlight?}), close() }
-  function open({ bottomEl, onClose } = {}) {
+  // open({ bottomEl?, onClose?, onZoomChange? })
+  //   -> { update(snap, {highlight?}), close(), setTapMode(fn), setZoom(s), getZoom() }
+  function open({ bottomEl, onClose, onZoomChange } = {}) {
     const overlay = el(`<div style="position:fixed;inset:0;background:#0c0906;z-index:60;display:flex;flex-direction:column"></div>`);
     const viewport = el(`<div style="flex:1;position:relative;overflow:hidden;touch-action:none"></div>`);
     const holder = el(`<div style="position:absolute;left:0;top:0;transform-origin:0 0"></div>`);
@@ -38,6 +39,7 @@ window.CampfireMapViewer = (function () {
     const v = { scale: 1, tx: 0, ty: 0, imagePath: null, focused: false };
     const apply = () => {
       holder.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+      if (onZoomChange) onZoomChange(v.scale);
     };
     const clampView = () => {
       const vw = viewport.clientWidth, vh = viewport.clientHeight;
@@ -48,9 +50,13 @@ window.CampfireMapViewer = (function () {
 
     const pointers = new Map();
     let pinchStart = null;
+    let tapHandler = null; // when set, taps place instead of pan/zoom
+    let downAt = null;
     viewport.onpointerdown = (ev) => {
       if (ev.target === closeBtn) return;
       viewport.setPointerCapture(ev.pointerId);
+      downAt = { x: ev.clientX, y: ev.clientY };
+      if (tapHandler) return; // tap-to-place mode: no pan/pinch
       pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -63,6 +69,7 @@ window.CampfireMapViewer = (function () {
       }
     };
     viewport.onpointermove = (ev) => {
+      if (tapHandler) return;
       const prev = pointers.get(ev.pointerId);
       if (!prev) return;
       const cur = { x: ev.clientX, y: ev.clientY };
@@ -84,6 +91,15 @@ window.CampfireMapViewer = (function () {
     const lift = (ev) => {
       pointers.delete(ev.pointerId);
       if (pointers.size < 2) pinchStart = null;
+      // tap-to-place: a clean tap (not a swipe) reports image-fraction coords
+      if (tapHandler && downAt
+          && Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) < 12) {
+        const r = holder.getBoundingClientRect();
+        const fx = (ev.clientX - r.left) / r.width;
+        const fy = (ev.clientY - r.top) / r.height;
+        if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) tapHandler(fx, fy);
+      }
+      downAt = null;
     };
     viewport.onpointerup = lift;
     viewport.onpointercancel = lift;
@@ -151,7 +167,27 @@ window.CampfireMapViewer = (function () {
     }
     closeBtn.onclick = close;
 
-    return { update, close };
+    // setTapMode(fn): taps call fn(fx, fy) in image fractions and pan/pinch is
+    // suspended; setTapMode(null) restores normal navigation.
+    function setTapMode(fn) {
+      tapHandler = fn;
+      viewport.style.cursor = fn ? 'crosshair' : '';
+      viewport.style.outline = fn ? '3px solid var(--ember)' : '';
+      viewport.style.outlineOffset = '-3px';
+    }
+
+    // setZoom(s): zoom around the center of the viewport (for external sliders)
+    function setZoom(scale) {
+      const cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2;
+      const world = { x: (cx - v.tx) / v.scale, y: (cy - v.ty) / v.scale };
+      v.scale = Math.min(10, Math.max(1, scale));
+      v.tx = cx - world.x * v.scale;
+      v.ty = cy - world.y * v.scale;
+      clampView();
+      apply();
+    }
+
+    return { update, close, setTapMode, setZoom, getZoom: () => v.scale };
   }
 
   return { open };
