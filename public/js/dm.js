@@ -165,7 +165,9 @@
   function render() {
     if (!snap) return;
     root.innerHTML = '';
-    // quick-fill source for every condition input on the page
+    const oldSticky = document.getElementById('gm-sticky');
+    if (oldSticky) oldSticky.remove();
+
     const suggestions = [...new Set([
       ...snap.used_conditions,
       ...snap.config.CONDITIONS.campfire,
@@ -173,14 +175,66 @@
     ])];
     root.appendChild(el(`<datalist id="cond-suggestions">${suggestions.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>`));
     root.appendChild(encounterBar());
+
+    const jumps = el(`<div class="section-jumps"></div>`);
+    const jumpData = [
+      ['initiative', '⚔', snap.initiative.entries.length],
+      ['clocks', '🕗', snap.clocks.length],
+      ['map', '🗺', snap.map ? 1 : 0],
+      ['party', '👥', snap.characters.length],
+    ];
+    for (const [key, icon, count] of jumpData) {
+      const pill = el(`<button class="section-pill ${gmSections[key] ? 'active' : ''}">${icon}<span class="section-pill-count">${count || ''}</span></button>`);
+      pill.onclick = () => {
+        gmSections[key] = !gmSections[key];
+        render();
+        if (gmSections[key]) {
+          const target = document.getElementById('gm-' + key);
+          if (target) setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+        }
+      };
+      jumps.appendChild(pill);
+    }
+    root.appendChild(jumps);
+
     root.appendChild(initiativeBoard());
     root.appendChild(clocksManager());
     root.appendChild(mapManager());
-    root.appendChild(el(`<h2>The party</h2>`));
-    const grid = el(`<div class="card-grid"></div>`);
+    root.appendChild(partySection());
+
+    if (snap.initiative.entries.length > 0) {
+      const bar = el(`<div class="gm-sticky" id="gm-sticky"></div>`);
+      const entries = snap.initiative.entries;
+      const current = entries.find((e) => e.id === snap.initiative.turn_id);
+      if (current) {
+        const c = current.char_id !== null ? snap.characters.find((x) => x.id === current.char_id) : null;
+        bar.appendChild(el(`<span class="gm-sticky-turn">▶ ${esc(c ? c.name : current.label)}</span>`));
+      }
+      const next = el(`<button class="primary">⏭ Next</button>`);
+      next.onclick = () => {
+        const idx = entries.findIndex((e) => e.id === snap.initiative.turn_id);
+        conn.action('initiative.set_turn', { entry_id: entries[(idx + 1) % entries.length].id });
+      };
+      bar.appendChild(next);
+      document.body.appendChild(bar);
+    }
+  }
+
+  function partySection() {
+    const box = el(`<div class="card" id="gm-party"></div>`);
+    const toggle = el(`<div class="section-toggle">
+      <span class="section-arrow" style="transform:rotate(${gmSections.party ? 90 : 0}deg)">▶</span>
+      <h3 style="margin:0;flex:1">👥 The party</h3>
+      <span class="muted small">${snap.characters.length} character${snap.characters.length !== 1 ? 's' : ''}</span>
+    </div>`);
+    toggle.onclick = () => { gmSections.party = !gmSections.party; render(); };
+    box.appendChild(toggle);
+    if (!gmSections.party) return box;
+    const grid = el(`<div class="card-grid" style="margin-top:10px"></div>`);
     for (const c of snap.characters) grid.appendChild(charCard(c));
     if (snap.characters.length === 0) grid.appendChild(el(`<p class="muted">No characters yet — players join at the site address and forge heroes.</p>`));
-    root.appendChild(grid);
+    box.appendChild(grid);
+    return box;
   }
 
   // --- encounter / settings bar ---------------------------------------------
@@ -205,8 +259,19 @@
 
   // --- initiative board: characters AND anything the GM types in -------------
   function initiativeBoard() {
-    const box = el(`<div class="card"><h3>⚔ Initiative</h3></div>`);
+    const box = el(`<div class="card" id="gm-initiative"></div>`);
     const entries = snap.initiative.entries;
+    const currentEntry = entries.find((e) => e.id === snap.initiative.turn_id);
+    const currentC = currentEntry && currentEntry.char_id !== null ? snap.characters.find((x) => x.id === currentEntry.char_id) : null;
+    const turnName = currentEntry ? (currentC ? currentC.name : currentEntry.label) : '';
+    const toggle = el(`<div class="section-toggle">
+      <span class="section-arrow" style="transform:rotate(${gmSections.initiative ? 90 : 0}deg)">▶</span>
+      <h3 style="margin:0;flex:1">⚔ Initiative</h3>
+      <span class="muted small">${entries.length > 0 ? entries.length + (turnName ? ' · ▶ ' + esc(turnName) : '') : ''}</span>
+    </div>`);
+    toggle.onclick = () => { gmSections.initiative = !gmSections.initiative; render(); };
+    box.appendChild(toggle);
+    if (!gmSections.initiative) return box;
 
     if (entries.length === 0) {
       box.appendChild(el(`<p class="muted small">Empty — add party members or type in monsters, hazards, lair actions…</p>`));
@@ -282,15 +347,6 @@
     customRow.append(customIn, customBtn);
     box.appendChild(customRow);
 
-    // the big one lives at the very bottom, out of the way and easy to thumb
-    if (entries.length > 0) {
-      const next = el(`<button style="width:100%;margin-top:10px">⏭ Next turn</button>`);
-      next.onclick = () => {
-        const idx = entries.findIndex((e) => e.id === snap.initiative.turn_id);
-        conn.action('initiative.set_turn', { entry_id: entries[(idx + 1) % entries.length].id });
-      };
-      box.appendChild(next);
-    }
     return box;
 
     function reorder(from, to) {
@@ -303,7 +359,16 @@
 
   // --- clocks manager ---------------------------------------------------------
   function clocksManager() {
-    const box = el(`<div class="card"><h3>🕗 Clocks</h3></div>`);
+    const box = el(`<div class="card" id="gm-clocks"></div>`);
+    const toggle = el(`<div class="section-toggle">
+      <span class="section-arrow" style="transform:rotate(${gmSections.clocks ? 90 : 0}deg)">▶</span>
+      <h3 style="margin:0;flex:1">🕗 Clocks</h3>
+      <span class="muted small">${snap.clocks.length > 0 ? snap.clocks.length + ' clock' + (snap.clocks.length !== 1 ? 's' : '') : ''}</span>
+    </div>`);
+    toggle.onclick = () => { gmSections.clocks = !gmSections.clocks; render(); };
+    box.appendChild(toggle);
+    if (!gmSections.clocks) return box;
+
     const row = el(`<div style="display:flex;flex-wrap:wrap"></div>`);
     for (const clock of snap.clocks) {
       const cell = el(`<div style="text-align:center"></div>`);
@@ -324,17 +389,21 @@
     }
     box.appendChild(row);
 
-    const form = el(`<div class="btn-row"></div>`);
-    const label = el(`<input type="text" placeholder="Collapse the bridge" style="max-width:200px" maxlength="60">`);
+    const form = el(`<div class="form-stack"></div>`);
+    const nameRow = el(`<div class="btn-row" style="margin:4px 0"></div>`);
+    const label = el(`<input type="text" placeholder="Collapse the bridge" style="flex:1;min-width:0" maxlength="60">`);
+    const add = el(`<button class="mini primary">+ clock</button>`);
+    nameRow.append(label, add);
+    const optRow = el(`<div class="btn-row" style="margin:4px 0"></div>`);
     const segs = el(`<select style="max-width:80px">${snap.config.CLOCK_SEGMENT_CHOICES.map((n) => `<option ${n === 6 ? 'selected' : ''}>${n}</option>`).join('')}</select>`);
     const kind = el(`<select style="max-width:120px"><option value="progress">progress</option><option value="danger">danger</option></select>`);
     const vis = el(`<select style="max-width:110px"><option value="visible">visible</option><option value="dm_only">secret</option></select>`);
-    const add = el(`<button class="mini primary">+ clock</button>`);
     add.onclick = () => {
       conn.action('clock.create', { label: label.value.trim(), segments: Number(segs.value), kind: kind.value, visibility: vis.value });
       label.value = '';
     };
-    form.append(label, segs, kind, vis, add);
+    optRow.append(segs, kind, vis);
+    form.append(nameRow, optRow);
     box.appendChild(form);
     return box;
   }
@@ -362,6 +431,8 @@
     newW: 1,
     newH: 1,
   };
+
+  const gmSections = { initiative: true, clocks: true, map: true, party: true };
 
   // Broad starter colors; the GM's own colors live in snap.custom_colors.
   const BASIC_COLORS = ['#c43c34', '#e2701a', '#e7c52a', '#3f9b4f', '#3e8ed0', '#7b4fa6', '#d957a8', '#f3e9d8', '#8a8a8a', '#2b2b2e'];
@@ -394,7 +465,17 @@
   }
 
   function mapManager() {
-    const box = el(`<div class="card"><h3>🗺 Battle map</h3></div>`);
+    const box = el(`<div class="card" id="gm-map"></div>`);
+    const mapName = snap.map ? snap.map.name : '';
+    const toggle = el(`<div class="section-toggle">
+      <span class="section-arrow" style="transform:rotate(${gmSections.map ? 90 : 0}deg)">▶</span>
+      <h3 style="margin:0;flex:1">🗺 Battle map</h3>
+      <span class="muted small">${mapName ? esc(mapName) : ''}</span>
+    </div>`);
+    toggle.onclick = () => { gmSections.map = !gmSections.map; render(); };
+    box.appendChild(toggle);
+    if (!gmSections.map) return box;
+
     if (mapUI.upload) {
       box.appendChild(calibrationUI());
     } else if (snap.map) {
@@ -619,7 +700,7 @@
 
     // minimap: tap anywhere to point the camera there; shows every token so
     // the GM sees the whole board at a glance (the full render is /display)
-    const mini = el(`<div style="position:relative;max-width:300px;cursor:crosshair"></div>`);
+    const mini = el(`<div class="cam-minimap"></div>`);
     const miniImg = el(`<img src="${map.image_path}" style="width:100%;display:block;border:1px solid var(--line);border-radius:8px" draggable="false">`);
     mini.appendChild(miniImg);
 
@@ -793,19 +874,12 @@
       Dots = tokens · orange frame = what the <a href="/display" target="_blank">projector</a> shows.</p>`));
 
     const pan = map.cell_size * 2;
-    const ctl = el(`<div class="btn-row"></div>`);
     const mk = (txt, fn, title) => {
       const b = el(`<button class="mini" title="${title}">${txt}</button>`);
       b.disabled = mapUI.cameraLocked;
       b.onclick = fn;
       return b;
     };
-    const lock = el(`<button class="mini ${mapUI.cameraLocked ? 'primary' : 'ghost'}" title="${mapUI.cameraLocked ? 'unlock the camera' : 'lock the camera so stray taps can’t move it'}">${mapUI.cameraLocked ? '🔒' : '🔓'}</button>`);
-    lock.onclick = () => { mapUI.cameraLocked = !mapUI.cameraLocked; render(); };
-    ctl.appendChild(lock);
-    // Nudges are SCREEN-relative: with the map rotated 90°, "up" means up on
-    // the projector, not up in image pixels — so rotate the pan vector by the
-    // inverse of the camera rotation before applying it in image space.
     const nudge = (sx, sy) => {
       const th = (cam.rotation_deg * Math.PI) / 180;
       send({
@@ -814,22 +888,43 @@
         center_y: cam.center_y + (-sx * Math.sin(th) + sy * Math.cos(th)) * pan,
       });
     };
-    ctl.append(
-      mk('◀', () => nudge(-1, 0), 'nudge left (as seen on the projector)'),
-      mk('▲', () => nudge(0, -1), 'nudge up (as seen on the projector)'),
-      mk('▼', () => nudge(0, 1), 'nudge down (as seen on the projector)'),
-      mk('▶', () => nudge(1, 0), 'nudge right (as seen on the projector)'),
+
+    const camCtl = el(`<div class="cam-controls"></div>`);
+    const lock = el(`<button class="mini ${mapUI.cameraLocked ? 'primary' : 'ghost'}" title="${mapUI.cameraLocked ? 'unlock the camera' : 'lock — prevents stray taps'}">${mapUI.cameraLocked ? '🔒' : '🔓'}</button>`);
+    lock.onclick = () => { mapUI.cameraLocked = !mapUI.cameraLocked; render(); };
+
+    const camPad = el(`<div class="cam-pad"></div>`);
+    camPad.append(
+      el(`<span></span>`),
+      mk('▲', () => nudge(0, -1), 'nudge up'),
+      el(`<span></span>`),
+      mk('◀', () => nudge(-1, 0), 'nudge left'),
+      mk('🎯', () => send({ center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 }), 'reset view'),
+      mk('▶', () => nudge(1, 0), 'nudge right'),
+      el(`<span></span>`),
+      mk('▼', () => nudge(0, 1), 'nudge down'),
+      el(`<span></span>`),
+    );
+
+    const sideCol = el(`<div class="cam-side"></div>`);
+    const zoomRow = el(`<div class="btn-row" style="margin:0;justify-content:center"></div>`);
+    zoomRow.append(
       mk('+🔎', () => send({ ...cam, zoom: cam.zoom * 1.3 }), 'zoom in'),
       mk('−🔎', () => send({ ...cam, zoom: cam.zoom / 1.3 }), 'zoom out'),
+    );
+    const rotRow = el(`<div class="btn-row" style="margin:0;justify-content:center"></div>`);
+    rotRow.append(
       mk('⟲', () => send({ ...cam, rotation_deg: cam.rotation_deg - 15 }), 'rotate left'),
       mk('⟳', () => send({ ...cam, rotation_deg: cam.rotation_deg + 15 }), 'rotate right'),
-      mk('🎯', () => send({ center_x: map.image_w / 2, center_y: map.image_h / 2, zoom: 1, rotation_deg: 0 }), 'reset view'),
     );
-    ctl.appendChild(el(`<span class="muted small">zoom ${Math.round(cam.zoom * 100)}%${cam.rotation_deg ? ` · ${cam.rotation_deg}°` : ''}</span>`));
+    sideCol.append(zoomRow, rotRow);
+    sideCol.appendChild(el(`<span class="muted small" style="text-align:center">${Math.round(cam.zoom * 100)}%${cam.rotation_deg ? ' · ' + cam.rotation_deg + '°' : ''}</span>`));
+
     const gridBtn = el(`<button class="mini ${map.grid_visible ? '' : 'ghost'}" title="overlay the calibrated grid on the projector">▦ grid ${map.grid_visible ? 'on' : 'off'}</button>`);
     gridBtn.onclick = () => conn.action('map.set_grid_visible', { map_id: map.id, visible: !map.grid_visible });
-    ctl.appendChild(gridBtn);
-    box.appendChild(ctl);
+
+    camCtl.append(lock, camPad, sideCol, gridBtn);
+    box.appendChild(camCtl);
 
     // bookmarks: saved views to snap to mid-session — save field on top,
     // the list of saved views rendered underneath it
@@ -1318,7 +1413,7 @@
         }
         if (t.kind !== 'glow') {
           const artFile = el(`<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`);
-          const artBtn = el(`<button class="mini ghost" title="${t.art ? 'replace this token’s image' : 'use an image for this token (a 3x3 dragon deserves a dragon)'}">🖼</button>`);
+          const artBtn = el(`<button class="mini ghost" title="${t.art ? 'replace token image' : 'use an image for this token'}">🖼</button>`);
           artBtn.onclick = (ev) => { ev.stopPropagation(); artFile.click(); };
           artFile.onclick = (ev) => ev.stopPropagation();
           artFile.onchange = async () => {
