@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga — Campaign Assistant</title>
+<link rel="stylesheet" href="/css/app.css?v=4">
+<style>
+  /* Prep-time only screen — used at home with internet, on the GM port. */
+  .assist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 820px) { .assist-grid { grid-template-columns: 1fr; } }
+  .transcript, .activity {
+    height: 340px; overflow-y: auto; background: #150f0a; border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; font-size: 0.95rem;
+  }
+  .msg { margin: 8px 0; line-height: 1.4; }
+  .msg .who { font-family: 'Trebuchet MS', sans-serif; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--gold); display: block; margin-bottom: 2px; }
+  .msg.user .who { color: var(--ember); }
+  .activity .row { border-bottom: 1px dashed var(--line); padding: 6px 0; font-family: 'Trebuchet MS', sans-serif; font-size: 0.85rem; }
+  .activity .row b { color: var(--gold); }
+  .activity .row.err b { color: var(--ember-deep); }
+  .activity img { max-width: 64px; border-radius: 6px; margin-top: 4px; display: block; }
+  .pill { display: inline-block; border-radius: 999px; padding: 3px 12px; font-size: 0.8rem;
+    border: 1px solid var(--line); background: var(--bg-raised); }
+  .pill.live { border-color: var(--ember); color: var(--ember); }
+  .chat-input { display: flex; gap: 8px; margin-top: 10px; }
+  .chat-input input { flex: 1; }
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:1100px">
+  <header class="site-head">
+    <div class="flame">🔥</div>
+    <h1>Campaign Assistant</h1>
+    <p class="subtitle">Talk through your campaign and let the assistant flesh out NPCs, locations,
+      story beats, characters and clocks — generating art and prose as it goes. Everything it makes
+      shows up live on your <a href="/dm">GM screen</a>.</p>
+    <p class="muted">Needs internet — do this at home before the trip. (The campsite Pi runs offline.)</p>
+  </header>
+
+  <div class="banner" id="key-note" style="display:none"></div>
+
+  <div class="assist-grid">
+    <div class="card">
+      <h2 style="margin-top:0">🎙 Voice <span class="pill" id="voice-state">off</span></h2>
+      <div class="btn-row">
+        <button class="primary" id="voice-start">Start talking</button>
+        <button class="ghost" id="voice-stop" disabled>Stop</button>
+      </div>
+      <p class="muted small">Uses OpenAI's realtime voice over WebRTC. Allow microphone access when asked.</p>
+      <div class="transcript" id="transcript"><p class="muted">Press “Start talking”, then just speak.</p></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">⌨ Text</h2>
+      <div class="transcript" id="chat-log"><p class="muted">Type a request, e.g. “Build me a smuggler NPC who runs the docks, with a portrait.”</p></div>
+      <form class="chat-input" id="chat-form">
+        <input type="text" id="chat-text" placeholder="Describe what you want…" autocomplete="off">
+        <button class="primary" type="submit" id="chat-send">Send</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">🛠 What it built this session</h2>
+    <div class="activity" id="activity"><p class="muted">Tool actions (cards, images, characters…) appear here as they happen.</p></div>
+  </div>
+
+  <div class="btn-row" style="justify-content:center">
+    <a href="/dm"><button>🜲 GM screen</button></a>
+    <a href="/status"><button class="ghost">System screen</button></a>
+  </div>
+</div>
+<audio id="assistant-audio" autoplay></audio>
+<script src="/js/assist.js"></script>
+</body>
+</html>

@@ -95,4 +95,4 @@ function attach(httpServer, log) {
   return wss;
 }
 
-module.exports = { attach, allClients };
+module.exports = { attach, allClients, broadcastSnapshots };
