@@ -29,7 +29,7 @@ const state = {
   entryConditions: new Map(), // entry_id -> [{id, kind, visibility}] for custom initiative entries
   maps: new Map(),
   tokens: new Map(),
-  cards: new Map(),    // id -> reveal card { id, kind, name, subtitle, notes, images[], sections[], token_*, bg_*, visited } — NPCs/locations/story
+  cards: new Map(),    // id -> reveal card { id, kind, name, subtitle, notes, images[], sections[], token_*, bg_*, visited, seen } — NPCs/locations/story (visited/seen gate the players' Knowledge section)
   camera: null,
   camera_bookmarks: [],
   custom_colors: [], // GM's saved token colors ('#rrggbb'), persisted in runtime
@@ -146,6 +146,7 @@ function load() {
       images: JSON.parse(row.images), sections: JSON.parse(row.sections),
       token_w: row.token_w, token_h: row.token_h, token_shape: row.token_shape,
       bg_image: row.bg_image, bg_effect: row.bg_effect, visited: !!row.visited,
+      seen: !!row.seen,
       images_slides: row.images_slides === undefined ? true : !!row.images_slides,
       show_link: row.show_link === undefined ? true : !!row.show_link,
     });
@@ -305,6 +306,7 @@ function persistCard(c) {
     images: JSON.stringify(c.images), sections: JSON.stringify(c.sections),
     token_w: c.token_w, token_h: c.token_h, token_shape: c.token_shape,
     bg_image: c.bg_image, bg_effect: c.bg_effect, visited: c.visited ? 1 : 0,
+    seen: c.seen ? 1 : 0,
     images_slides: c.images_slides === false ? 0 : 1,
     show_link: c.show_link === false ? 0 : 1,
   });
@@ -1163,13 +1165,13 @@ const ops = {
     const name = R.assertNonEmptyString(p.name, 'name');
     const row = {
       kind, name, subtitle: '', notes: '', images: '[]', sections: '[]',
-      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: 0, images_slides: 1, show_link: 1,
+      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: 0, seen: 0, images_slides: 1, show_link: 1,
     };
     const info = stmts.insertCard.run(row);
     const id = Number(info.lastInsertRowid);
     state.cards.set(id, {
       id, kind, name, subtitle: '', notes: '', images: [], sections: [],
-      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: false, images_slides: true, show_link: true,
+      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: false, seen: false, images_slides: true, show_link: true,
     });
     return { created_card_id: id };
   },
@@ -1189,6 +1191,7 @@ const ops = {
     if (p.bg_image !== undefined) c.bg_image = assertTokenArt(p.bg_image === null ? '' : p.bg_image, 'bg_image');
     if (p.bg_effect !== undefined) c.bg_effect = R.assertOneOf(p.bg_effect, config.NPC_EFFECTS, 'bg_effect');
     if (p.visited !== undefined) { R.assert(typeof p.visited === 'boolean', 'visited must be a boolean'); c.visited = p.visited; }
+    if (p.seen !== undefined) { R.assert(typeof p.seen === 'boolean', 'seen must be a boolean'); c.seen = p.seen; }
     if (p.images_slides !== undefined) { R.assert(typeof p.images_slides === 'boolean', 'images_slides must be a boolean'); c.images_slides = p.images_slides; }
     persistCard(c);
   },
@@ -1357,10 +1360,12 @@ function publicFocus(publicSections) {
 // Player/projector view of the revealed card: visible entries only, no GM notes
 // or done flags. Sections with nothing visible are dropped so no empty headers
 // reach the wall.
-function publicRevealedCard() {
-  if (state.game.revealed_card_id === null) return null;
-  const c = state.cards.get(state.game.revealed_card_id);
-  if (!c) return null;
+// Static player/projector view of ANY card: visible entries only, no GM notes or
+// done flags. Sections with nothing visible are dropped so no empty headers reach
+// the wall. The live reveal-only knobs (GM-held image index, paused crawl, focus)
+// default to "off" here — publicRevealedCard() layers those on for the card that's
+// actually being presented.
+function publicCardView(c) {
   // Compose the slideshow AND the public sections together, so each image can
   // carry the index of the (public) chapter/scene that supplied it — the reveal
   // draws a connector line from that text to the image frame. e:-1 = chapter
@@ -1397,18 +1402,51 @@ function publicRevealedCard() {
     image_sources: imageSources,
     bg_image: c.bg_image,
     bg_effect: c.bg_effect,
-    // GM-held image index (clamped to the composed list), else null = slideshow
-    image_index: (typeof state.reveal_image_index === 'number' && state.reveal_image_index < images.length)
-      ? state.reveal_image_index : null,
+    image_index: null,      // no GM-held image — let the slideshow run
     show_link: c.show_link !== false,
-    scroll_paused: !!state.reveal_scroll_paused,
+    scroll_paused: false,   // not the live reveal — never paused
     // global feel knobs the reveal honors (auto-scroll speed, particle on/off)
     scroll_speed: state.settings.scroll_speed || 1,
     particles_enabled: state.settings.particles_enabled !== false,
-    // clamp to a real section/entry; a stale focus (content changed underneath) clears
-    focus: publicFocus(publicSections),
+    focus: null,            // focus is a live-reveal spotlight only
+    _publicSections: publicSections, // internal handle so the live view can clamp focus
     sections: publicSections,
   };
+}
+
+function publicRevealedCard() {
+  if (state.game.revealed_card_id === null) return null;
+  const c = state.cards.get(state.game.revealed_card_id);
+  if (!c) return null;
+  const view = publicCardView(c);
+  const publicSections = view._publicSections;
+  delete view._publicSections;
+  // layer the live reveal-only state onto the static view
+  // GM-held image index (clamped to the composed list), else null = slideshow
+  view.image_index = (typeof state.reveal_image_index === 'number' && state.reveal_image_index < view.images.length)
+    ? state.reveal_image_index : null;
+  view.scroll_paused = !!state.reveal_scroll_paused;
+  // clamp to a real section/entry; a stale focus (content changed underneath) clears
+  view.focus = publicFocus(publicSections);
+  return view;
+}
+
+// The party's shared Knowledge: cards the players have been let in on — visited
+// locations and met NPCs (story stays GM-only for now). Each is the same static
+// public view the reveal component renders, so tapping one in the Knowledge
+// section replays exactly the screen they were shown.
+function knownCards() {
+  const out = [];
+  for (const c of state.cards.values()) {
+    const known = (c.kind === 'location' && c.visited) || (c.kind === 'npc' && c.seen);
+    if (!known) continue;
+    const view = publicCardView(c);
+    delete view._publicSections;
+    // a known card with nothing public to show would be a blank entry — skip it
+    if (view.images.length === 0 && view.sections.length === 0) continue;
+    out.push(view);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,6 +1585,8 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
       clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
       device_name: deviceId ? ((state.devices.get(deviceId) || {}).name || '') : '',
       revealed_card: publicRevealedCard(),
+      // shared party knowledge — visited locations + met NPCs, browsable any time
+      known_cards: knownCards(),
     };
   }
   // display: roster + visible clocks only; never hidden desires, never dm_only clocks.

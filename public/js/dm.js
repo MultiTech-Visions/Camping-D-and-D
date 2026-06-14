@@ -1720,21 +1720,21 @@
       namePh: 'Ogre King', subtitlePh: 'subtitle (e.g. Tyrant of the Crags)',
       sectionWord: 'section', entryWord: 'entry', sectionPh: 'section title (e.g. Lore, Tactics, Loot)',
       empty: 'No NPCs yet — create an Ogre King, a villain, a quest-giver… give it a token and notes, and it’s here for every session.',
-      thumbEmoji: '👹', tokenSize: true, placeOnMap: true, addToInit: true, visited: false, done: false,
+      thumbEmoji: '👹', tokenSize: true, placeOnMap: true, addToInit: true, visited: false, seen: true, done: false,
     },
     location: {
       icon: '🌍', title: 'Locations', sectionId: 'gm-location', createLabel: 'location',
       namePh: 'The Sunken Keep', subtitlePh: 'subtitle (e.g. Drowned ruin on the moor)',
       sectionWord: 'section', entryWord: 'detail', sectionPh: 'section title (e.g. Description, Points of interest, Secrets)',
       empty: 'No locations yet — build a tavern, a dungeon, a haunted wood… add images and details to reveal on the screen.',
-      thumbEmoji: '📍', tokenSize: false, placeOnMap: false, addToInit: false, visited: true, done: false,
+      thumbEmoji: '📍', tokenSize: false, placeOnMap: false, addToInit: false, visited: true, seen: false, done: false,
     },
     story: {
       icon: '📖', title: 'Story', sectionId: 'gm-story', createLabel: 'story arc',
       namePh: 'The Gathering Storm', subtitlePh: 'subtitle (e.g. Act I)',
       sectionWord: 'chapter', entryWord: 'scene', sectionPh: 'chapter title (e.g. Chapter 1 — The Road)',
       empty: 'No story yet — add a chapter, then scenes inside it. Mark scenes done as you play to track where you are.',
-      thumbEmoji: '📖', tokenSize: false, placeOnMap: false, addToInit: false, visited: false, done: true,
+      thumbEmoji: '📖', tokenSize: false, placeOnMap: false, addToInit: false, visited: false, seen: false, done: true,
     },
   };
 
@@ -1933,6 +1933,8 @@
         if (all > 0) badge = ` <span class="muted small">· ${doneN}/${all} scenes done</span>`;
       } else if (cfg.visited && c.visited) {
         badge = ` <span class="small" style="color:var(--ok)">· ✓ visited</span>`;
+      } else if (cfg.seen && c.seen) {
+        badge = ` <span class="small" style="color:var(--ok)">· ✓ seen</span>`;
       }
       row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1;margin-left:8px">${esc(c.name)}${c.subtitle ? ` <span class="muted small">— ${esc(c.subtitle)}</span>` : ''}${badge}</span>`));
       const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
@@ -2031,13 +2033,21 @@
     subRow.append(el(`<span class="small" style="align-self:center">subtitle</span>`), subIn);
     box.appendChild(subRow);
 
-    // visited toggle (locations)
+    // visited toggle (locations) / seen toggle (NPCs) — both gate whether the
+    // card shows in the players' Knowledge section
     if (cfg.visited) {
       const vRow = el(`<div class="btn-row" style="margin-top:4px"></div>`);
-      const vBtn = el(`<button class="mini ${c.visited ? 'primary' : 'ghost'}">${c.visited ? '✓ Visited' : '○ Mark visited'}</button>`);
+      const vBtn = el(`<button class="mini ${c.visited ? 'primary' : 'ghost'}" title="${c.visited ? 'visited — players can revisit this in their Knowledge section' : 'mark visited — adds it to the players’ Knowledge section'}">${c.visited ? '✓ Visited' : '○ Mark visited'}</button>`);
       vBtn.onclick = () => upd({ visited: !c.visited });
       vRow.appendChild(vBtn);
       box.appendChild(vRow);
+    }
+    if (cfg.seen) {
+      const sRow = el(`<div class="btn-row" style="margin-top:4px"></div>`);
+      const sBtn = el(`<button class="mini ${c.seen ? 'primary' : 'ghost'}" title="${c.seen ? 'met — players can revisit this in their Knowledge section' : 'mark seen — adds it to the players’ Knowledge section'}">${c.seen ? '✓ Seen' : '○ Mark seen'}</button>`);
+      sBtn.onclick = () => upd({ seen: !c.seen });
+      sRow.appendChild(sBtn);
+      box.appendChild(sRow);
     }
 
     // images / slideshow (for NPCs the first image doubles as the map token)
@@ -2391,9 +2401,14 @@
     const project = el(`<button class="mini ${isShowing ? 'primary' : ''}" title="show this on the projector + players">${isShowing ? '⏹ Projecting' : '📽 Project'}</button>`);
     project.onclick = () => conn.action('card.reveal', { card_id: isShowing ? null : n.id });
     if (cfg.visited) {
-      const vBtn = el(`<button class="mini ${n.visited ? 'primary' : 'ghost'}" title="${n.visited ? 'visited — tap to unmark' : 'mark visited'}">${n.visited ? '✓ visited' : '○ visited'}</button>`);
+      const vBtn = el(`<button class="mini ${n.visited ? 'primary' : 'ghost'}" title="${n.visited ? 'visited — in the players’ Knowledge; tap to unmark' : 'mark visited — adds to the players’ Knowledge'}">${n.visited ? '✓ visited' : '○ visited'}</button>`);
       vBtn.onclick = () => conn.action('card.update', { card_id: n.id, visited: !n.visited });
       cardViewer.barHost.appendChild(vBtn);
+    }
+    if (cfg.seen) {
+      const sBtn = el(`<button class="mini ${n.seen ? 'primary' : 'ghost'}" title="${n.seen ? 'seen — in the players’ Knowledge; tap to unmark' : 'mark seen — adds to the players’ Knowledge'}">${n.seen ? '✓ seen' : '○ seen'}</button>`);
+      sBtn.onclick = () => conn.action('card.update', { card_id: n.id, seen: !n.seen });
+      cardViewer.barHost.appendChild(sBtn);
     }
     // hold the wall on your selected image, or let the images slideshow while you
     // keep reading — only meaningful when the composed slideshow has >1 image

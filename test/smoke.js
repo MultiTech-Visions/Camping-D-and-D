@@ -683,6 +683,36 @@ check('reveal cards: slideshow gates compose card + chapter + scene images', () 
   assert.strictEqual(snapshotFor('display', null).revealed_card.show_link, false);
 });
 
+check('knowledge: visited locations + seen NPCs reach players, story never does', () => {
+  const { snapshotFor } = require('../state');
+  const loc = ops['card.create']({ kind: 'location', name: 'The Sunken Keep' }).created_card_id;
+  const met = ops['card.create']({ kind: 'npc', name: 'Sera the Guide' }).created_card_id;
+  const arc = ops['card.create']({ kind: 'story', name: 'The Gathering Storm' }).created_card_id;
+  // give each a public detail so none is skipped as a blank entry
+  for (const id of [loc, met, arc]) ops['card.update']({ card_id: id,
+    sections: [{ title: 'Description', entries: [{ label: '', text: 'a place', visible: true }] }] });
+  const known = () => snapshotFor('player', heroId, DEV).known_cards.map((c) => c.id).sort((a, b) => a - b);
+  // nothing is known until the GM marks it
+  assert.deepStrictEqual(known(), []);
+  // the GM snapshot has no knowledge list — they already see the whole library
+  assert.ok(!('known_cards' in snapshotFor('dm', null)));
+  ops['card.update']({ card_id: loc, visited: true });
+  ops['card.update']({ card_id: met, seen: true });
+  ops['card.update']({ card_id: arc, seen: true }); // story is gated out regardless
+  assert.deepStrictEqual(known(), [loc, met].sort((a, b) => a - b));
+  // a knowledge entry is the same scoped shape as a reveal — no GM notes, no internals
+  const view = snapshotFor('player', heroId, DEV).known_cards.find((c) => c.id === met);
+  assert.strictEqual(view.name, 'Sera the Guide');
+  assert.ok(!('notes' in view) && !('_publicSections' in view), 'GM/internal fields leaked into knowledge');
+  // unmarking pulls it back out of the players' knowledge
+  ops['card.update']({ card_id: met, seen: false });
+  assert.deepStrictEqual(known(), [loc]);
+  // a known card with nothing public to show is skipped (no blank entries)
+  ops['card.update']({ card_id: loc, sections: [] });
+  assert.deepStrictEqual(known(), []);
+  for (const id of [loc, met, arc]) ops['card.delete']({ card_id: id });
+});
+
 check('reveal cards: dismiss + deleting the revealed card clears the wall', () => {
   const { snapshotFor } = require('../state');
   ops['card.reveal']({ card_id: null });

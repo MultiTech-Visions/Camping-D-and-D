@@ -145,6 +145,9 @@ CREATE TABLE IF NOT EXISTS card (
   bg_image    TEXT    NOT NULL DEFAULT '',
   bg_effect   TEXT    NOT NULL DEFAULT 'embers',
   visited     INTEGER NOT NULL DEFAULT 0,
+  -- seen marks an NPC the players have met; like visited for locations, it gates
+  -- whether the card shows in the players' Knowledge section
+  seen        INTEGER NOT NULL DEFAULT 0,
   -- whether the card's OWN images are included in the reveal slideshow
   images_slides INTEGER NOT NULL DEFAULT 1,
   -- whether the reveal draws the connector line from caption text to the image
@@ -258,6 +261,11 @@ if (db.prepare(`PRAGMA table_info(card)`).all().length > 0
     && !db.prepare(`PRAGMA table_info(card)`).all().some((c) => c.name === 'show_link')) {
   db.exec(`ALTER TABLE card ADD COLUMN show_link INTEGER NOT NULL DEFAULT 1`);
 }
+// Card-level "players have met this NPC" toggle — Knowledge section gate (added later).
+if (db.prepare(`PRAGMA table_info(card)`).all().length > 0
+    && !db.prepare(`PRAGMA table_info(card)`).all().some((c) => c.name === 'seen')) {
+  db.exec(`ALTER TABLE card ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`);
+}
 
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
   .run(config.REWARD_EVERY_N_ENCOUNTERS_DEFAULT);
@@ -327,11 +335,11 @@ const stmts = {
   deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
   allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 
-  insertCard: db.prepare(`INSERT INTO card (kind, name, subtitle, notes, images, sections, token_w, token_h, token_shape, bg_image, bg_effect, visited, images_slides, show_link)
-    VALUES (@kind, @name, @subtitle, @notes, @images, @sections, @token_w, @token_h, @token_shape, @bg_image, @bg_effect, @visited, @images_slides, @show_link)`),
+  insertCard: db.prepare(`INSERT INTO card (kind, name, subtitle, notes, images, sections, token_w, token_h, token_shape, bg_image, bg_effect, visited, seen, images_slides, show_link)
+    VALUES (@kind, @name, @subtitle, @notes, @images, @sections, @token_w, @token_h, @token_shape, @bg_image, @bg_effect, @visited, @seen, @images_slides, @show_link)`),
   updateCard: db.prepare(`UPDATE card SET name=@name, subtitle=@subtitle, notes=@notes,
     images=@images, sections=@sections, token_w=@token_w, token_h=@token_h, token_shape=@token_shape,
-    bg_image=@bg_image, bg_effect=@bg_effect, visited=@visited, images_slides=@images_slides, show_link=@show_link WHERE id=@id`),
+    bg_image=@bg_image, bg_effect=@bg_effect, visited=@visited, seen=@seen, images_slides=@images_slides, show_link=@show_link WHERE id=@id`),
   deleteCard: db.prepare(`DELETE FROM card WHERE id=?`),
   allCards: db.prepare(`SELECT * FROM card ORDER BY id`),
 
