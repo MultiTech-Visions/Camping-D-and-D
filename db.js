@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS map_calibration (
 -- Phase 3: tokens live in GRID coordinates (col,row) — never pixels/screen.
 CREATE TABLE IF NOT EXISTS token (
   id          INTEGER PRIMARY KEY,
+  map_id      INTEGER REFERENCES map_calibration(id) ON DELETE CASCADE,  -- tokens belong to ONE map; never shared
   label       TEXT    NOT NULL,
   kind        TEXT    NOT NULL CHECK (kind IN ('pc','monster','glow','terrain')),
   char_id     INTEGER REFERENCES character(id) ON DELETE CASCADE,  -- only for kind='pc'
@@ -113,7 +114,64 @@ CREATE TABLE IF NOT EXISTS runtime (
   id   INTEGER PRIMARY KEY CHECK (id = 1),
   json TEXT NOT NULL
 );
+
+-- Player devices (phones/tablets). Each browser mints a UUID in localStorage;
+-- the player names it so the GM sees "Sara's phone" instead of a raw fingerprint.
+CREATE TABLE IF NOT EXISTS device (
+  id   TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT ''
+);
+
+-- Reusable "reveal cards" the GM prepares ahead of time: monsters/NPCs,
+-- locations, and story beats. One mechanism, three kinds. images is a JSON
+-- array of uploaded image paths (a slideshow on the reveal screen; for NPCs [0]
+-- doubles as the map token). sections is a JSON array of
+--   { title, entries: [{ label, text, visible, done }] }
+-- — a video-game-style panel the GM reveals on the projector + players,
+-- toggling individual entries on/off live. token_w/h/shape are the default map
+-- footprint (NPCs only). visited marks a location as visited; entry.done marks
+-- a story scene complete.
+CREATE TABLE IF NOT EXISTS card (
+  id          INTEGER PRIMARY KEY,
+  kind        TEXT    NOT NULL DEFAULT 'npc' CHECK (kind IN ('npc','location','story')),
+  name        TEXT    NOT NULL,
+  subtitle    TEXT    NOT NULL DEFAULT '',
+  notes       TEXT    NOT NULL DEFAULT '',
+  images      TEXT    NOT NULL DEFAULT '[]',
+  sections    TEXT    NOT NULL DEFAULT '[]',
+  token_w     INTEGER NOT NULL DEFAULT 1,
+  token_h     INTEGER NOT NULL DEFAULT 1,
+  token_shape TEXT    NOT NULL DEFAULT 'circle',
+  bg_image    TEXT    NOT NULL DEFAULT '',
+  bg_effect   TEXT    NOT NULL DEFAULT 'embers',
+  visited     INTEGER NOT NULL DEFAULT 0,
+  -- whether the card's OWN images are included in the reveal slideshow
+  images_slides INTEGER NOT NULL DEFAULT 1,
+  -- whether the reveal draws the connector line from caption text to the image
+  show_link   INTEGER NOT NULL DEFAULT 1
+);
 `);
+
+// One-time import of the old npc table into the unified card table (kind='npc'),
+// preserving ids so the revealed pointer still resolves. Dropped afterwards so
+// this runs exactly once. ?? fallbacks cover npc tables from before some columns
+// existed, so the obsolete npc ALTER migrations are no longer needed.
+if (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='npc'`).get()) {
+  const rows = db.prepare(`SELECT * FROM npc`).all();
+  const ins = db.prepare(`INSERT OR IGNORE INTO card
+    (id, kind, name, subtitle, notes, images, sections, token_w, token_h, token_shape, bg_image, bg_effect, visited)
+    VALUES (@id,'npc',@name,@subtitle,@notes,@images,@sections,@token_w,@token_h,@token_shape,@bg_image,@bg_effect,0)`);
+  const tx = db.transaction(() => {
+    for (const r of rows) ins.run({
+      id: r.id, name: r.name, subtitle: r.subtitle ?? '', notes: r.notes ?? '',
+      images: r.images ?? '[]', sections: r.sections ?? '[]',
+      token_w: r.token_w ?? 1, token_h: r.token_h ?? 1, token_shape: r.token_shape ?? 'circle',
+      bg_image: r.bg_image ?? '', bg_effect: r.bg_effect ?? 'embers',
+    });
+  });
+  tx();
+  db.exec(`DROP TABLE npc`);
+}
 
 // Migrations for databases created before these columns existed.
 // Conditions: the original table had char_id NOT NULL and no entry_id /
@@ -160,12 +218,45 @@ if (!db.prepare(`PRAGMA table_info(character)`).all().some((c) => c.name === 'to
 if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'art')) {
   db.exec(`ALTER TABLE token ADD COLUMN art TEXT`);
 }
+// Scope tokens to a map. Older DBs had one global token pool shared across every
+// map; backfill those onto the currently-active map so they don't vanish.
+if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'map_id')) {
+  db.exec(`ALTER TABLE token ADD COLUMN map_id INTEGER REFERENCES map_calibration(id) ON DELETE CASCADE`);
+  const activeId = db.prepare(`SELECT active_map_id FROM game WHERE id = 1`).get()?.active_map_id ?? null;
+  if (activeId !== null) db.prepare(`UPDATE token SET map_id = ? WHERE map_id IS NULL`).run(activeId);
+  // No active map to claim them and no way to know which map they were for — drop orphans.
+  db.exec(`DELETE FROM token WHERE map_id IS NULL`);
+}
 if (!db.prepare(`PRAGMA table_info(token)`).all().some((c) => c.name === 'color')) {
   db.exec(`ALTER TABLE token ADD COLUMN color TEXT NOT NULL DEFAULT ''`);
   db.exec(`UPDATE token SET color = CASE kind
     WHEN 'pc' THEN '#3e8ed0' WHEN 'monster' THEN '#c43c34'
     WHEN 'terrain' THEN '#8a8a8a' ELSE COALESCE(glow_color, '#ff8c2e') END
     WHERE color = ''`);
+}
+if (!db.prepare(`PRAGMA table_info(character)`).all().some((c) => c.name === 'device_id')) {
+  db.exec(`ALTER TABLE character ADD COLUMN device_id TEXT`);
+}
+// Which prepared card is currently revealed on the projector + players
+// (nullable). Migrates the old revealed_npc_id pointer if present.
+{
+  const gameCols = () => db.prepare(`PRAGMA table_info(game)`).all().map((c) => c.name);
+  if (!gameCols().includes('revealed_card_id')) {
+    db.exec(`ALTER TABLE game ADD COLUMN revealed_card_id INTEGER`);
+    if (gameCols().includes('revealed_npc_id')) {
+      db.exec(`UPDATE game SET revealed_card_id = revealed_npc_id WHERE id = 1`);
+    }
+  }
+}
+// Card-level "include my own images in the slideshow" toggle (added later).
+if (db.prepare(`PRAGMA table_info(card)`).all().length > 0
+    && !db.prepare(`PRAGMA table_info(card)`).all().some((c) => c.name === 'images_slides')) {
+  db.exec(`ALTER TABLE card ADD COLUMN images_slides INTEGER NOT NULL DEFAULT 1`);
+}
+// Card-level "draw the connector line on the reveal" toggle (added later).
+if (db.prepare(`PRAGMA table_info(card)`).all().length > 0
+    && !db.prepare(`PRAGMA table_info(card)`).all().some((c) => c.name === 'show_link')) {
+  db.exec(`ALTER TABLE card ADD COLUMN show_link INTEGER NOT NULL DEFAULT 1`);
 }
 
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
@@ -181,14 +272,15 @@ db.prepare(`INSERT OR IGNORE INTO runtime (id, json) VALUES (1, ?)`)
 const stmts = {
   insertCharacter: db.prepare(`
     INSERT INTO character (system, name, concept, brawn, constitution, magic, wits,
-      flavor, hidden_desire, gear, notes, encounters_done, pending_points, token_art, dnd_sheet)
+      flavor, hidden_desire, gear, notes, encounters_done, pending_points, token_art, dnd_sheet, device_id)
     VALUES (@system, @name, @concept, @brawn, @constitution, @magic, @wits,
-      @flavor, @hidden_desire, @gear, @notes, @encounters_done, @pending_points, @token_art, @dnd_sheet)`),
+      @flavor, @hidden_desire, @gear, @notes, @encounters_done, @pending_points, @token_art, @dnd_sheet, @device_id)`),
   updateCharacter: db.prepare(`
     UPDATE character SET name=@name, concept=@concept, brawn=@brawn, constitution=@constitution,
       magic=@magic, wits=@wits, flavor=@flavor, hidden_desire=@hidden_desire, gear=@gear,
       notes=@notes, encounters_done=@encounters_done, pending_points=@pending_points,
-      token_art=@token_art, dnd_sheet=@dnd_sheet WHERE id=@id`),
+      token_art=@token_art, dnd_sheet=@dnd_sheet, device_id=@device_id WHERE id=@id`),
+  setCharacterDevice: db.prepare(`UPDATE character SET device_id=? WHERE id=?`),
   deleteCharacter: db.prepare(`DELETE FROM character WHERE id=?`),
   allCharacters: db.prepare(`SELECT * FROM character ORDER BY id`),
 
@@ -208,7 +300,7 @@ const stmts = {
   allClocks: db.prepare(`SELECT * FROM clock ORDER BY id`),
 
   getGame: db.prepare(`SELECT * FROM game WHERE id=1`),
-  updateGame: db.prepare(`UPDATE game SET reward_every_n_encounters=@reward_every_n_encounters, active_map_id=@active_map_id WHERE id=1`),
+  updateGame: db.prepare(`UPDATE game SET reward_every_n_encounters=@reward_every_n_encounters, active_map_id=@active_map_id, revealed_card_id=@revealed_card_id WHERE id=1`),
 
   insertMap: db.prepare(`
     INSERT INTO map_calibration (name, image_path, image_w, image_h, cell_size, offset_x, offset_y,
@@ -226,8 +318,8 @@ const stmts = {
   allMaps: db.prepare(`SELECT * FROM map_calibration ORDER BY id`),
 
   insertToken: db.prepare(`
-    INSERT INTO token (label, kind, char_id, col, row, w, h, shape, color, art, glow_color, glow_radius, glow_pulse)
-    VALUES (@label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @art, @glow_color, @glow_radius, @glow_pulse)`),
+    INSERT INTO token (map_id, label, kind, char_id, col, row, w, h, shape, color, art, glow_color, glow_radius, glow_pulse)
+    VALUES (@map_id, @label, @kind, @char_id, @col, @row, @w, @h, @shape, @color, @art, @glow_color, @glow_radius, @glow_pulse)`),
   updateToken: db.prepare(`
     UPDATE token SET label=@label, kind=@kind, char_id=@char_id, col=@col, row=@row,
       w=@w, h=@h, shape=@shape,
@@ -235,8 +327,23 @@ const stmts = {
   deleteToken: db.prepare(`DELETE FROM token WHERE id=?`),
   allTokens: db.prepare(`SELECT * FROM token ORDER BY id`),
 
+  insertCard: db.prepare(`INSERT INTO card (kind, name, subtitle, notes, images, sections, token_w, token_h, token_shape, bg_image, bg_effect, visited, images_slides, show_link)
+    VALUES (@kind, @name, @subtitle, @notes, @images, @sections, @token_w, @token_h, @token_shape, @bg_image, @bg_effect, @visited, @images_slides, @show_link)`),
+  updateCard: db.prepare(`UPDATE card SET name=@name, subtitle=@subtitle, notes=@notes,
+    images=@images, sections=@sections, token_w=@token_w, token_h=@token_h, token_shape=@token_shape,
+    bg_image=@bg_image, bg_effect=@bg_effect, visited=@visited, images_slides=@images_slides, show_link=@show_link WHERE id=@id`),
+  deleteCard: db.prepare(`DELETE FROM card WHERE id=?`),
+  allCards: db.prepare(`SELECT * FROM card ORDER BY id`),
+
   getRuntime: db.prepare(`SELECT json FROM runtime WHERE id=1`),
   saveRuntime: db.prepare(`UPDATE runtime SET json=? WHERE id=1`),
+
+  // Devices: ensureDevice records a freshly-seen id (keeps any existing name);
+  // setDeviceName upserts a chosen name.
+  ensureDevice: db.prepare(`INSERT INTO device (id, name) VALUES (?, '') ON CONFLICT(id) DO NOTHING`),
+  setDeviceName: db.prepare(`INSERT INTO device (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name`),
+  deleteDevice: db.prepare(`DELETE FROM device WHERE id=?`),
+  allDevices: db.prepare(`SELECT * FROM device`),
 };
 
 module.exports = { db, stmts };

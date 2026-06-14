@@ -3,26 +3,37 @@
 // WebSocket layer: hello → role-scoped snapshot; action → validate/mutate/persist
 // via state.ops, then broadcast fresh role-scoped snapshots to every client.
 // Validation failures go back to the requester as {type:"error"} — never ignored.
+//
+// attach() may be called multiple times (once per HTTP server / port). All WS
+// servers share allClients so a GM action on port 3001 immediately pushes
+// snapshots to players connected on port 3000.
 
 const { WebSocketServer } = require('ws');
-const { load, ops, snapshotFor } = require('./state');
+const { load, ops, snapshotFor, registerDevice } = require('./state');
+
+const allClients = new Set();
+let stateLoaded = false;
+
+function sendSnapshot(client) {
+  if (client.readyState !== 1 || !client.role) return;
+  const connectedDeviceIds = client.role === 'dm'
+    ? [...new Set([...allClients].filter(c => c.deviceId).map(c => c.deviceId))]
+    : [];
+  client.send(JSON.stringify({ type: 'snapshot', ...snapshotFor(client.role, client.charId, client.deviceId, connectedDeviceIds) }));
+}
+
+function broadcastSnapshots() {
+  for (const client of allClients) sendSnapshot(client);
+}
 
 function attach(httpServer, log) {
-  load();
+  if (!stateLoaded) { load(); stateLoaded = true; }
   const wss = new WebSocketServer({ server: httpServer });
-
-  function sendSnapshot(client) {
-    if (client.readyState !== 1 || !client.role) return;
-    client.send(JSON.stringify({ type: 'snapshot', ...snapshotFor(client.role, client.charId) }));
-  }
-
-  function broadcastSnapshots() {
-    for (const client of wss.clients) sendSnapshot(client);
-  }
 
   wss.on('connection', (sock, req) => {
     sock.role = null;
     sock.charId = null;
+    allClients.add(sock);
     log(`ws connect from ${req.socket.remoteAddress}`);
 
     sock.on('message', (raw) => {
@@ -40,7 +51,10 @@ function attach(httpServer, log) {
           }
           sock.role = msg.role;
           sock.charId = Number.isInteger(msg.char_id) ? msg.char_id : null;
-          sendSnapshot(sock);
+          sock.deviceId = (typeof msg.device_id === 'string' && msg.device_id.length > 0) ? msg.device_id : null;
+          registerDevice(sock.deviceId, msg.device_name);
+          // Broadcast so any open GM screen sees this device come online (and its name).
+          broadcastSnapshots();
           return;
         }
         if (msg.type === 'action') {
@@ -63,18 +77,22 @@ function attach(httpServer, log) {
           log(`op ${msg.op || msg.type} rejected: ${err.message}`);
           sock.send(JSON.stringify({ type: 'error', op: msg.op || msg.type, reason: err.message }));
         } else {
-          // Unexpected = a bug. Log loudly with stack; tell the client; keep serving.
           log(`UNEXPECTED ERROR in op ${msg.op || msg.type}: ${err.stack}`);
           sock.send(JSON.stringify({ type: 'error', op: msg.op || msg.type, reason: `server bug: ${err.message}` }));
         }
       }
     });
 
-    sock.on('close', () => log(`ws disconnect (${sock.role || 'no role'})`));
+    sock.on('close', () => {
+      allClients.delete(sock);
+      log(`ws disconnect (${sock.role || 'no role'})`);
+      // Refresh GM device lists so the just-left device flips to offline.
+      broadcastSnapshots();
+    });
     sock.on('error', (err) => log(`ws socket error: ${err.message}`));
   });
 
   return wss;
 }
 
-module.exports = { attach };
+module.exports = { attach, allClients };

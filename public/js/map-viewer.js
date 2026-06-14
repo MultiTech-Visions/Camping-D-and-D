@@ -38,6 +38,7 @@ window.CampfireMapViewer = (function () {
       bar.appendChild(bottomEl);
       overlay.appendChild(bar);
     }
+    CampfireScrollLock.lock();
     document.body.appendChild(overlay);
 
     const v = { scale: 1, tx: 0, ty: 0, imagePath: null, focused: false, map: null };
@@ -226,6 +227,7 @@ window.CampfireMapViewer = (function () {
       closed = true;
       if (fogRaf) cancelAnimationFrame(fogRaf);
       overlay.remove();
+      CampfireScrollLock.unlock();
       if (onClose) onClose();
     }
     closeBtn.onclick = close;

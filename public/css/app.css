@@ -93,6 +93,35 @@ label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.
 .field-row { display: flex; gap: 10px; }
 .field-row > * { flex: 1; }
 
+/* Gear & notes: tappable displays that grow to fit content */
+.note-field { cursor: pointer; margin-bottom: 6px; }
+.note-body {
+  background: #150f0a; border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px; white-space: pre-wrap; word-break: break-word; min-height: 44px;
+}
+.note-field:hover .note-body { border-color: var(--ember); }
+.note-body.empty { color: var(--ink-dim); font-style: italic; }
+
+/* Full-screen single-field editor; closing saves.
+   Flex column on the DYNAMIC viewport height (100dvh) so the on-screen keyboard
+   shrinks the text box, not the header — the Done button stays reachable. */
+.note-editor {
+  position: fixed; top: 0; left: 0; right: 0; height: 100dvh; z-index: 200;
+  background: var(--bg); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.note-editor-bar {
+  flex: 0 0 auto; height: 60px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--bg-card);
+}
+.note-editor-title { font-weight: 700; color: var(--ink); }
+.note-editor-area {
+  flex: 1 1 auto; min-height: 0;
+  border: none; border-radius: 0; resize: none; padding: 16px;
+  font-size: 1.05rem; line-height: 1.5; overflow-y: auto;
+}
+
 /* --- dice icons (CSS-rendered; real art can replace later) --- */
 .die {
   display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 7px;
@@ -115,6 +144,9 @@ label { display: block; margin: 10px 0 4px; color: var(--ink-dim); font-size: 0.
   border-bottom: 1px dashed var(--line); flex-wrap: wrap;
 }
 .attr-row:last-child { border-bottom: none; }
+.attr-group { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.attr-group:last-child { border-bottom: none; }
+.attr-group .attr-row { border-bottom: none; padding: 6px 0; }
 .attr-row.turn-active {
   background: rgba(255, 140, 46, 0.08); border-radius: 8px;
   border-bottom-color: var(--ember);
@@ -311,3 +343,420 @@ body.display-mode .clock-kind {
   .card { padding: 12px; }
   button.mini { padding: 4px 8px; font-size: 0.85rem; }
 }
+
+/* =========================================================================
+   Monsters & NPCs — full-screen stat-block reveal (projector + players) and
+   the GM's library editor.
+   ========================================================================= */
+.npc-reveal {
+  position: fixed; inset: 0; z-index: 70; display: flex;
+  background:
+    radial-gradient(ellipse 70% 60% at 25% 40%, #241a12 0%, transparent 70%),
+    #07060a;
+  overflow: hidden;
+}
+/* optional full-screen backdrop image, with a scrim so text stays legible */
+.npc-reveal-bg {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; background-size: cover; background-position: center;
+}
+.npc-reveal-bg.has-image::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 75% 80% at 22% 45%, rgba(7, 6, 10, 0.35), transparent 60%),
+    linear-gradient(90deg, rgba(7, 6, 10, 0.6) 0%, rgba(7, 6, 10, 0.82) 55%, rgba(7, 6, 10, 0.92) 100%);
+}
+/* full-screen layers: spell out top/left/width/height instead of the `inset`
+   shorthand so older projector browsers don't leave the canvas at its default
+   300×150 in the top-left corner */
+.npc-reveal-fx { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+.npc-reveal-portrait {
+  position: relative; z-index: 2;
+  flex: 0 0 42%; display: flex; align-items: center; justify-content: center;
+  padding: 3vw; min-width: 0;
+}
+.npc-reveal-info { position: relative; z-index: 2; }
+.npc-frame {
+  position: relative; width: 100%; max-width: 620px; aspect-ratio: 3 / 4;
+  border-radius: 14px; overflow: hidden;
+  border: 2px solid var(--ember-deep);
+  background: linear-gradient(160deg, #1a120c, #0b0807);
+  box-shadow:
+    0 0 0 6px rgba(0, 0, 0, 0.6),
+    0 0 50px rgba(255, 140, 46, 0.32),
+    inset 0 0 60px rgba(0, 0, 0, 0.65);
+}
+.npc-frame.empty::after {
+  content: '👹'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 7rem; opacity: 0.35;
+}
+.npc-slide {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  transition: opacity 1.1s ease; will-change: opacity;
+}
+.npc-frame-corner {
+  position: absolute; width: 26px; height: 26px; z-index: 2; pointer-events: none;
+  border: 3px solid var(--gold); filter: drop-shadow(0 0 4px rgba(240, 180, 41, 0.6));
+}
+.npc-frame-corner.tl { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+.npc-frame-corner.tr { top: 8px; right: 8px; border-left: none; border-bottom: none; }
+.npc-frame-corner.bl { bottom: 8px; left: 8px; border-right: none; border-top: none; }
+.npc-frame-corner.br { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+
+.npc-reveal-info {
+  flex: 1 1 58%; min-width: 0; display: flex; flex-direction: column;
+  padding: 4vh 4vw 4vh 1vw;
+}
+.npc-reveal-name {
+  margin: 0; color: var(--ember); font-size: clamp(2rem, 5vw, 4rem);
+  line-height: 1.05; text-shadow: 0 0 26px rgba(255, 140, 46, 0.4);
+  border: none; letter-spacing: 0.01em;
+}
+.npc-reveal-sub {
+  color: var(--gold); font-style: italic; font-size: clamp(1rem, 2vw, 1.6rem);
+  margin: 4px 0 14px; border-bottom: 1px solid var(--line); padding-bottom: 12px;
+}
+/* fill the remaining column height and scroll WITHIN that box (min-height:0 lets
+   a flex item shrink below its content so overflow-y actually engages) — this is
+   what gives the projector's auto-crawl something to scroll */
+.npc-reveal-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 10px; }
+.npc-reveal-sec-title {
+  color: var(--ember); text-transform: uppercase; letter-spacing: 0.14em;
+  font-size: clamp(1.05rem, 2vw, 1.55rem); font-weight: 700;
+  margin: 24px 0 10px; padding-bottom: 6px;
+  border-bottom: 2px solid var(--ember-deep);
+  text-shadow: 0 0 16px rgba(255, 140, 46, 0.35);
+}
+.npc-reveal-entry {
+  margin: 18px 0 0; font-size: clamp(1rem, 1.7vw, 1.45rem); line-height: 1.4;
+}
+/* SECTION focus: the chosen section lifts in place (a raised panel with a slow
+   pulsing edge) while the others darken and sink under its shadow. No scaling —
+   that overflowed the column sideways; box-sizing + overflow-x keep it tidy. */
+.npc-reveal-sections, .npc-reveal-group { box-sizing: border-box; }
+.npc-reveal-group, .npc-reveal-sec-title, .npc-reveal-entry {
+  transition: opacity 0.45s ease, filter 0.45s ease;
+}
+.reveal-focus-mode .dimmed { opacity: 0.26; filter: blur(1px) brightness(0.5); }
+.reveal-focus-mode .npc-reveal-group.is-focus {
+  position: relative; z-index: 5; opacity: 1; filter: none;
+  background: rgba(22, 15, 10, 0.96);
+  border: 1px solid var(--ember);
+  border-radius: 10px; padding: 14px 18px; margin: 6px 0;
+  animation: focuspulse 2.1s ease-in-out infinite;
+}
+@keyframes focuspulse {
+  0%, 100% {
+    box-shadow: 0 12px 30px 6px rgba(0, 0, 0, 0.72),
+      0 0 0 1px rgba(255, 140, 46, 0.45), 0 0 16px 2px rgba(255, 140, 46, 0.3);
+  }
+  50% {
+    box-shadow: 0 16px 42px 10px rgba(0, 0, 0, 0.8),
+      0 0 0 2px rgba(255, 170, 70, 0.95), 0 0 38px 6px rgba(255, 140, 46, 0.7);
+  }
+}
+
+/* ENTRY focus: a centered ornate popup floating over the whole reveal (images
+   included), the scrim darkening everything beneath, the box casting a deep
+   shadow with a pulsing gilded edge and fleur-de-lis corners. */
+.npc-focus-scrim {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 6vh 6vw;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.86));
+  animation: focusfade 0.34s ease both;
+}
+.npc-focus-scrim.closing { animation: focusfadeout 0.3s ease forwards; }
+.npc-focus-pop {
+  position: relative; box-sizing: border-box;
+  width: 100%; max-width: min(900px, 82vw); max-height: 82vh;
+  display: flex; flex-direction: column;
+  padding: 34px 44px; border-radius: 16px;
+  background: linear-gradient(165deg, #241a12, #130f0b 80%);
+  border: 2px solid var(--ember);
+  /* ease in once (with a gentle overshoot), then settle into the slow pulse */
+  animation: focuspopin 0.42s cubic-bezier(0.18, 0.9, 0.28, 1.2) both, focuspoppulse 2.4s ease-in-out 0.42s infinite;
+}
+.npc-focus-scrim.closing .npc-focus-pop { animation: focuspopout 0.28s ease forwards; }
+.npc-focus-pop::before { /* inner gilt frame line */
+  content: ''; position: absolute; top: 14px; left: 14px; right: 14px; bottom: 14px;
+  border: 1px solid rgba(240, 180, 41, 0.35); border-radius: 9px; pointer-events: none;
+}
+.npc-focus-corner {
+  position: absolute; font-size: clamp(2.9rem, 6vw, 4.6rem); color: var(--gold); line-height: 1;
+  text-shadow: 0 0 16px rgba(240, 180, 41, 0.85), 0 0 4px rgba(240, 180, 41, 0.9);
+  pointer-events: none; z-index: 1;
+}
+.npc-focus-corner.tl { top: -26px; left: -8px; }
+.npc-focus-corner.tr { top: -26px; right: -8px; transform: scaleX(-1); }
+.npc-focus-corner.bl { bottom: -34px; left: -8px; transform: scaleY(-1); }
+.npc-focus-corner.br { bottom: -34px; right: -8px; transform: scale(-1, -1); }
+.npc-focus-pop-label {
+  flex: none; color: var(--ember); font-weight: 700;
+  font-size: clamp(1.5rem, 3.2vw, 2.6rem); text-transform: uppercase; letter-spacing: 0.06em;
+  margin-bottom: 16px; text-shadow: 0 0 18px rgba(255, 140, 46, 0.4);
+}
+.npc-focus-pop-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  color: var(--ink); font-size: clamp(1.15rem, 2.1vw, 1.8rem); line-height: 1.55;
+  white-space: pre-wrap;
+}
+/* projector screen-swap splash (broadcast-style bumper) */
+#screen-transition {
+  position: fixed; inset: 0; z-index: 200; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, #1a0f08, #060507);
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.26s ease, visibility 0s linear 0.26s;
+}
+#screen-transition.show {
+  opacity: 1; visibility: visible;
+  transition: opacity 0.2s ease, visibility 0s;
+}
+/* no image for this reveal kind → a gentle dim crossfade rather than a full splash */
+#screen-transition.blank { background: rgba(6, 5, 7, 0.82); }
+#screen-transition.blank.show { opacity: 0.72; }
+/* default (no image): a centered glowing emoji over the ember gradient */
+.screen-transition-inner {
+  width: 60vmin; height: 60vmin; max-width: 80vw;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22vmin; filter: drop-shadow(0 0 40px rgba(255, 140, 46, 0.6));
+  transform: scale(0.86); transition: transform 0.45s cubic-bezier(0.18, 0.9, 0.28, 1.2);
+}
+/* uploaded image: fill the whole screen with a subtle zoom-in */
+.screen-transition-inner.has-image {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; max-width: none;
+  font-size: 0; filter: none;
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  transform: scale(1.06); transition: transform 0.55s ease-out;
+}
+#screen-transition.show .screen-transition-inner { transform: scale(1); }
+#screen-transition.show .screen-transition-inner.has-image { transform: scale(1); }
+
+@keyframes focusfade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes focusfadeout { from { opacity: 1; } to { opacity: 0; } }
+@keyframes focuspopin {
+  from { opacity: 0; transform: scale(0.84) translateY(16px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes focuspopout {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.9) translateY(10px); }
+}
+@keyframes focuspoppulse {
+  0%, 100% {
+    box-shadow: 0 30px 90px 22px rgba(0, 0, 0, 0.8),
+      0 0 0 1px rgba(255, 140, 46, 0.5), 0 0 30px 4px rgba(255, 140, 46, 0.3);
+  }
+  50% {
+    box-shadow: 0 36px 104px 28px rgba(0, 0, 0, 0.86),
+      0 0 0 2px rgba(255, 170, 70, 0.95), 0 0 62px 10px rgba(255, 140, 46, 0.68);
+  }
+}
+/* the entry label is its own header line, sitting above its text rather than
+   running into it; the extra space above each entry separates the groups */
+.npc-reveal-label { display: block; color: var(--ink); font-weight: 700; margin-bottom: 3px; }
+.npc-reveal-label::after { content: ''; }
+.npc-reveal-text { color: var(--ink-dim); white-space: pre-wrap; }
+.npc-reveal-empty { color: var(--ink-dim); opacity: 0.4; }
+.npc-reveal-close {
+  position: absolute; top: 14px; right: 14px; z-index: 3;
+}
+@media (max-width: 760px) {
+  .npc-reveal { flex-direction: column; }
+  .npc-reveal-portrait { flex: 0 0 38vh; padding: 14px; }
+  /* keep the 3/4 aspect so width derives from the fixed height — otherwise the
+     absolutely-positioned images give the frame no width and it collapses to a
+     thin bar on phones */
+  .npc-frame { height: 100%; max-width: none; width: auto; }
+  .npc-reveal-info { padding: 8px 16px 20px; }
+}
+
+/* PLAYER reveal: one scrollable column so a reader can reach every detail (the
+   projector keeps its fixed two-pane auto-scroll layout). The backdrop + effect
+   are pinned so only the content scrolls. */
+.npc-reveal.is-player { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.npc-reveal.is-player .npc-reveal-bg,
+.npc-reveal.is-player .npc-reveal-fx { position: fixed; }
+.npc-reveal.is-player .npc-reveal-portrait { padding: 16px; }
+/* keep the image prominent: a fixed height with width derived from the 3/4 aspect
+   (width:auto + absolute slides would collapse the frame to a thin bar) */
+.npc-reveal.is-player .npc-frame { height: 42vh; width: auto; max-width: 92vw; }
+.npc-reveal.is-player .npc-reveal-info { display: block; padding: 4px 18px 44px; }
+.npc-reveal.is-player .npc-reveal-scroll { flex: none; overflow: visible; min-height: 0; padding-right: 0; }
+.npc-reveal.is-player .npc-reveal-link { display: none; } /* would misalign over scrolling text */
+.npc-reveal.is-player .npc-reveal-close { position: fixed; top: 12px; right: 12px; }
+
+/* player-foldable section headers: tap the title to fold its entries away */
+.npc-reveal-sec-title.foldable { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; }
+.npc-reveal-label.foldable { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+.npc-reveal-caret { display: inline-block; font-size: 0.78em; opacity: 0.8; transition: transform 0.2s ease; }
+.npc-reveal-group.player-collapsed .npc-reveal-caret { transform: rotate(-90deg); }
+.npc-reveal-group.player-collapsed .npc-reveal-entry { display: none; }
+.npc-reveal-entry.entry-collapsed .npc-reveal-caret { transform: rotate(-90deg); }
+.npc-reveal-entry.entry-collapsed .npc-reveal-text { display: none; }
+/* master collapse/expand-all bar above the player's section list */
+.npc-reveal-foldbar { display: flex; gap: 8px; margin: 2px 0 12px; }
+.npc-reveal-foldbtn {
+  background: rgba(255, 255, 255, 0.06); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 12px; font-size: 0.95rem; cursor: pointer;
+}
+.npc-reveal-foldbtn:hover { color: var(--ink); border-color: var(--ember-deep); }
+
+/* --- GM NPC library --- */
+.npc-thumb {
+  display: inline-block; width: 34px; height: 34px; border-radius: 8px;
+  background-size: cover; background-position: center;
+  border: 1px solid var(--line); vertical-align: middle; flex: none;
+}
+.npc-thumb.placeholder { display: grid; place-items: center; background: var(--bg-raised); }
+.npc-edit-block {
+  margin: 4px 0 14px; padding: 10px 12px; border: 1px solid var(--line);
+  border-left: 3px solid var(--ember-deep); border-radius: 8px; background: rgba(0,0,0,0.18);
+}
+.npc-section-block {
+  margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px;
+}
+.npc-entry-row {
+  display: flex; align-items: center; gap: 6px; padding: 3px 0; flex-wrap: wrap;
+}
+.npc-img-strip { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.npc-img-chip { position: relative; }
+.npc-img-chip .npc-thumb { width: 46px; height: 46px; }
+.npc-img-chip .token-badge {
+  position: absolute; top: -6px; left: -6px; font-size: 0.7rem; background: var(--gold);
+  color: #1a0d04; border-radius: 6px; padding: 0 3px; font-weight: 700;
+}
+
+.reveal-reopen {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  border-radius: 0; border: none; border-top: 1px solid var(--ember-deep);
+  background: linear-gradient(180deg, var(--ember), var(--ember-deep)); color: #1a0d04;
+  font-weight: 700; padding: 12px; text-align: center;
+}
+
+/* --- GM NPC reading view: vertical, phone-shaped, with per-entry toggles --- */
+.npc-viewer {
+  position: fixed; inset: 0; z-index: 65; display: flex; flex-direction: column;
+  background:
+    radial-gradient(ellipse 90% 40% at 50% 0%, #241a12 0%, transparent 65%),
+    #0a0809;
+}
+.npc-viewer-bar {
+  display: flex; align-items: center; gap: 8px; padding: 10px;
+  border-bottom: 1px solid var(--line); background: rgba(0, 0, 0, 0.4);
+  position: sticky; top: 0; z-index: 2; flex-wrap: wrap;
+}
+.npc-viewer-scroll { flex: 1; overflow-y: auto; padding: 14px 14px 40px; }
+/* header row: small image (top-left) beside name/subtitle, then sections below */
+.npc-viewer-head {
+  display: flex; gap: 14px; align-items: flex-start;
+  max-width: 620px; margin: 0 auto 6px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.npc-viewer-imgwrap { flex: 0 0 auto; width: 124px; }
+.npc-viewer-carousel {
+  position: relative; width: 124px; height: 124px; border-radius: 10px;
+  overflow: hidden; border: 2px solid var(--ember-deep);
+  box-shadow: 0 0 18px rgba(255, 140, 46, 0.25);
+}
+.npc-viewer-track {
+  display: flex; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory;
+  -ms-overflow-style: none; scrollbar-width: none;
+}
+.npc-viewer-track::-webkit-scrollbar { display: none; }
+.npc-viewer-slide { flex: 0 0 100%; height: 100%; scroll-snap-align: center; }
+.npc-viewer-slide img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.npc-carousel-nav {
+  display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px;
+}
+.npc-carousel-nav .mini { min-height: 28px; padding: 2px 8px; }
+.npc-viewer-noimg {
+  width: 124px; height: 124px; border-radius: 10px; border: 2px solid var(--line);
+  background: var(--bg-raised); display: grid; place-items: center; font-size: 3rem; opacity: 0.5;
+}
+.npc-viewer-headtext { flex: 1; min-width: 0; }
+.npc-viewer-info { max-width: 620px; margin: 0 auto; }
+.npc-viewer-name {
+  margin: 0; color: var(--ember); font-size: 1.6rem; border: none;
+  text-shadow: 0 0 18px rgba(255, 140, 46, 0.35); word-break: break-word;
+}
+.npc-viewer-sub {
+  color: var(--gold); font-style: italic; margin-top: 2px;
+}
+.npc-viewer-live {
+  color: var(--ok); font-size: 0.8rem; margin-top: 6px;
+}
+/* ambience preview layers behind the reading content */
+.npc-viewer-bg { position: absolute; inset: 0; z-index: 0; background-size: cover; background-position: center; }
+.npc-viewer-bg.has-image::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(10, 8, 9, 0.74), rgba(10, 8, 9, 0.92));
+}
+.npc-viewer-fx { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.npc-viewer-bar { z-index: 3; }
+.npc-viewer-scroll { position: relative; z-index: 2; }
+.npc-viewer-sec-title {
+  color: var(--ember); text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700;
+  font-size: 1rem; margin: 18px 0 7px; border-bottom: 2px solid var(--ember-deep);
+  padding-bottom: 5px;
+}
+.npc-viewer-notes {
+  white-space: pre-wrap; color: var(--ink-dim); background: rgba(0, 0, 0, 0.25);
+  border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px;
+}
+.npc-viewer-entry {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 0;
+  border-bottom: 1px solid rgba(61, 48, 37, 0.5);
+}
+.npc-viewer-entry.is-hidden { opacity: 0.45; }
+.npc-viewer-entry .mini { flex: none; }
+.npc-viewer-entry-body { flex: 1; min-width: 0; }
+.npc-viewer-label { font-weight: 700; color: var(--ink); }
+.npc-viewer-text { color: var(--ink-dim); white-space: pre-wrap; }
+
+/* --- card editor: chapter/section headers + scene spacing --- */
+.card-chapter-head {
+  display: flex; align-items: center; gap: 4px; margin: 10px 0 6px; padding: 5px 6px;
+  background: rgba(255, 140, 46, 0.08); border-left: 3px solid var(--ember-deep);
+  border-radius: 6px;
+}
+.card-chapter-title {
+  flex: 1; min-width: 0; font-size: 1.12rem; font-weight: 700; color: var(--gold);
+  cursor: pointer; padding: 3px 4px; border-radius: 4px;
+}
+.card-chapter-title:hover { background: rgba(0, 0, 0, 0.2); text-decoration: underline; }
+.card-scene-row { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed rgba(61, 48, 37, 0.7); }
+
+/* live "broadcasting to the projector" badge on a GM section header */
+.live-badge {
+  display: inline-block; vertical-align: middle; margin-left: 8px;
+  color: #fff; background: var(--danger); font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.06em; padding: 1px 8px; border-radius: 999px;
+  box-shadow: 0 0 10px rgba(226, 85, 67, 0.7);
+  animation: livepulse 1.4s ease-in-out infinite;
+}
+@keyframes livepulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* held wide image on the reveal: pan left↔right forever so the whole picture shows */
+@keyframes npcpanx { from { object-position: 0% 50%; } to { object-position: 100% 50%; } }
+/* held-image ping-pong with a dwell at each edge. Percentages assume
+   PAN_MS 9000 + EDGE_HOLD_MS 2000 (cycle 22000): 0–9.1% rest left, pan to
+   50%, 50–59.1% rest right, pan back. */
+@keyframes npcpanpong {
+  0% { object-position: 0% 50%; }
+  9.1% { object-position: 0% 50%; }
+  50% { object-position: 100% 50%; }
+  59.1% { object-position: 100% 50%; }
+  100% { object-position: 0% 50%; }
+}
+
+/* connector line: from the caption that supplies the current image to the frame */
+.npc-reveal-link { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; overflow: visible; }
+.npc-reveal-link .link-glow { fill: none; stroke: var(--ember); stroke-width: 9; opacity: 0.18; }
+.npc-reveal-link .link-line {
+  fill: none; stroke: var(--ember); stroke-width: 2.5;
+  stroke-dasharray: 10 8; animation: linkflow 0.9s linear infinite;
+  filter: drop-shadow(0 0 6px var(--ember));
+}
+.npc-reveal-link .link-dot { fill: var(--gold); filter: drop-shadow(0 0 5px var(--ember)); }
+@keyframes linkflow { to { stroke-dashoffset: -18; } }

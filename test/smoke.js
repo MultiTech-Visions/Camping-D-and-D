@@ -64,10 +64,14 @@ function defaultSkills() {
 }
 
 let heroId, wizardId;
+// Both test heroes live on one phone: the player snapshot scopes characters by
+// device_id, so a player view only resolves with the owning device passed in.
+const DEV = 'dev-test-phone';
 check('character.create (campfire)', () => {
   heroId = ops['character.create']({
     system: 'campfire', name: 'Tharn', concept: 'storm-priest',
     brawn: 2, constitution: 1, magic: 1, wits: 0, hidden_desire: 'wants the crown',
+    device_id: DEV,
   }).created_char_id;
   assert.ok(Number.isInteger(heroId));
   throws(() => ops['character.create']({ system: 'campfire', name: 'Bad', concept: 'x', brawn: 3, constitution: 1, magic: 0, wits: 0 }));
@@ -77,6 +81,7 @@ check('character.create (campfire)', () => {
 check('character.create (dnd5e)', () => {
   wizardId = ops['character.create']({
     system: 'dnd5e', name: 'Mira', concept: 'tired wizard',
+    device_id: DEV,
     sheet: {
       class_name: 'Wizard', race: 'Elf', level: 3,
       abilities: { str: 8, dex: 14, con: 12, int: 17, wis: 12, cha: 10 },
@@ -187,13 +192,13 @@ check('conditions: freeform names, edit, visibility, both subject kinds', () => 
   ops['condition.add']({ char_id: heroId, kind: 'secretly cursed', visibility: 'dm_only' });
   const dmHero = snapshotFor('dm', null).characters.find((c) => c.id === heroId);
   assert.ok(dmHero.conditions.some((x) => x.kind === 'secretly cursed'));
-  const ownHero = snapshotFor('player', heroId).characters.find((c) => c.id === heroId);
+  const ownHero = snapshotFor('player', heroId, DEV).characters.find((c) => c.id === heroId);
   assert.ok(!ownHero.conditions.some((x) => x.kind === 'secretly cursed'), 'player saw a GM-only note!');
 
   // edit: rename + flip visibility
   const cursed = state.characters.get(heroId).conditions.find((x) => x.kind === 'secretly cursed');
   ops['condition.update']({ condition_id: cursed.id, kind: 'visibly cursed', visibility: 'visible' });
-  assert.ok(snapshotFor('player', heroId).characters.find((c) => c.id === heroId)
+  assert.ok(snapshotFor('player', heroId, DEV).characters.find((c) => c.id === heroId)
     .conditions.some((x) => x.kind === 'visibly cursed'));
 
   // conditions on a custom initiative entry; removed with the entry
@@ -254,12 +259,12 @@ check('role scoping: hidden desires + dm_only clocks never leak', () => {
   assert.ok(dm.characters.find((c) => c.id === heroId).hidden_desire === 'wants the crown');
   assert.ok(dm.clocks.some((c) => c.id === secretId));
 
-  const otherPlayer = snapshotFor('player', wizardId);
+  const otherPlayer = snapshotFor('player', wizardId, DEV);
   const heroSeen = otherPlayer.characters.find((c) => c.id === heroId);
   assert.strictEqual(heroSeen.hidden_desire, undefined, 'another player saw a hidden desire!');
   assert.ok(!otherPlayer.clocks.some((c) => c.id === secretId), 'a player saw a dm_only clock!');
 
-  const ownPlayer = snapshotFor('player', heroId);
+  const ownPlayer = snapshotFor('player', heroId, DEV);
   assert.strictEqual(ownPlayer.characters.find((c) => c.id === heroId).hidden_desire, 'wants the crown');
 
   const display = snapshotFor('display', null);
@@ -275,7 +280,7 @@ check('reward rate live-tunable', () => {
 
 check('reveal: dm_only clock flips visible in one op', () => {
   ops['clock.set_visibility']({ clock_id: secretId, visibility: 'visible' });
-  assert.ok(snapshotFor('player', heroId).clocks.some((c) => c.id === secretId));
+  assert.ok(snapshotFor('player', heroId, DEV).clocks.some((c) => c.id === secretId));
 });
 
 let mapId;
@@ -410,7 +415,7 @@ check('initiative visibility: dm_only entries never reach players/display', () =
   ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'dm_only' });
   assert.ok(snapshotFor('dm', null).initiative.entries.some((e) => e.id === reminder));
   assert.ok(!snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder), 'projector saw a GM-only entry!');
-  assert.ok(!snapshotFor('player', heroId).initiative.entries.some((e) => e.id === reminder), 'a player saw a GM-only entry!');
+  assert.ok(!snapshotFor('player', heroId, DEV).initiative.entries.some((e) => e.id === reminder), 'a player saw a GM-only entry!');
   ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'visible' });
   assert.ok(snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder));
   throws(() => ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'sneaky' }));

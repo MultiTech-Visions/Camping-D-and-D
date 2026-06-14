@@ -14,6 +14,9 @@
   let builderTokenArt = ''; // portrait uploaded during creation
   let editorScreen = null;  // null | 'profile' | 'dnd-stats' — survives snapshot re-renders
   let profilePendingArt = null; // portrait staged in the profile editor until Save
+  let revealNpcId = null;       // id of the NPC the GM is currently presenting (or null)
+  let revealDismissed = false;  // player closed the reveal — show a reopen banner instead
+  let revealBanner = null;
 
   const conn = CampfireWS.connect({
     role: 'player',
@@ -21,6 +24,7 @@
     onSnapshot(s) {
       snap = s;
       renderMapViewer(); // live token updates while the map viewer is open
+      updateReveal();    // GM presenting an NPC? show/refresh the stat-block splash
       // Don't blow away a textarea mid-thought; re-render after the field blurs.
       const ae = document.activeElement;
       if (ae && (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' && ae.type === 'text'))) {
@@ -152,11 +156,23 @@
     conceptIn.value = me.concept;
     card.appendChild(conceptIn);
     let flavorIn = null;
+    const attrInputs = {};
     if (me.system === 'campfire') {
       card.appendChild(el(`<label>Flavor label (cosmetic)</label>`));
       flavorIn = el(`<input type="text" maxlength="40">`);
       flavorIn.value = me.flavor;
       card.appendChild(flavorIn);
+      card.appendChild(el(`<label>Attributes (0–${snap.config.CEILING})</label>`));
+      const attrGrid = el(`<div class="field-row"></div>`);
+      for (const attr of snap.config.ATTRIBUTES) {
+        const wrap = el(`<div></div>`);
+        wrap.appendChild(el(`<label style="font-size:0.8rem;margin-bottom:2px">${attr}</label>`));
+        const input = el(`<input type="number" min="0" max="${snap.config.CEILING}" value="${me[attr]}" style="text-align:center">`);
+        wrap.appendChild(input);
+        attrGrid.appendChild(wrap);
+        attrInputs[attr] = input;
+      }
+      card.appendChild(attrGrid);
     }
     card.appendChild(el(`<label>Token image</label>`));
     card.appendChild(portraitPicker(profilePendingArt, (art) => { profilePendingArt = art; }).el);
@@ -171,6 +187,9 @@
         token_art: profilePendingArt,
       };
       if (flavorIn) payload.flavor = flavorIn.value.trim();
+      for (const attr of Object.keys(attrInputs)) {
+        payload[attr] = Math.max(0, Math.min(snap.config.CEILING, Number(attrInputs[attr].value) || 0));
+      }
       conn.action('character.update_sheet', payload);
       editorScreen = null;
       profilePendingArt = null;
@@ -247,6 +266,7 @@
         flavor: flavorIn.value.trim(),
         hidden_desire: desireIn.value.trim(),
         token_art: builderTokenArt,
+        device_id: CampfireWS.deviceId,
       });
     };
     card.appendChild(create);
@@ -388,6 +408,7 @@
         hidden_desire: f['d-desire'].value.trim(),
         token_art: builderTokenArt,
         sheet,
+        device_id: CampfireWS.deviceId,
       });
     };
     card.appendChild(create);
@@ -406,7 +427,10 @@
       const c = e.char_id === null ? null : snap.characters.find((x) => x.id === e.char_id);
       const name = c ? c.name : e.label;
       const isTurn = snap.initiative.turn_id === e.id;
-      row.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${c ? '' : '👹 '}${esc(name)}</span>`));
+      const face = e.art
+        ? `<span style="display:inline-block;width:18px;height:18px;border-radius:50%;background-image:url('${e.art}');background-size:cover;background-position:center;vertical-align:middle;margin-right:4px"></span>`
+        : (c ? '' : '👹 ');
+      row.appendChild(el(`<span class="chip ${isTurn ? 'on' : ''}">${isTurn ? '▶ ' : ''}${face}${esc(name)}</span>`));
     }
     box.appendChild(row);
     return box;
@@ -516,24 +540,51 @@
 
   function notesSection(me) {
     const box = el(`<div class="card"><h3>Gear &amp; notes</h3></div>`);
-    box.appendChild(el(`<label>Gear</label>`));
-    const gear = el(`<textarea></textarea>`);
-    gear.value = me.gear;
-    box.appendChild(gear);
-    box.appendChild(el(`<label>Notes</label>`));
-    const notes = el(`<textarea></textarea>`);
-    notes.value = me.notes;
-    box.appendChild(notes);
-    box.appendChild(el(`<label>Hidden desire (only you and the GM see this)</label>`));
-    const desire = el(`<textarea></textarea>`);
-    desire.value = me.hidden_desire === undefined ? '' : me.hidden_desire;
-    box.appendChild(desire);
-    const save = el(`<button class="mini">Save gear &amp; notes</button>`);
-    save.onclick = () => conn.action('character.update_sheet', {
-      char_id: me.id, gear: gear.value, notes: notes.value, hidden_desire: desire.value,
-    });
-    box.appendChild(save);
+    const fields = [
+      { key: 'gear', label: 'Gear', value: me.gear || '' },
+      { key: 'notes', label: 'Notes', value: me.notes || '' },
+      { key: 'hidden_desire', label: 'Hidden desire (only you and the GM see this)', value: me.hidden_desire === undefined ? '' : me.hidden_desire },
+    ];
+    for (const f of fields) {
+      const wrap = el(`<div class="note-field"></div>`);
+      wrap.appendChild(el(`<label>${f.label}</label>`));
+      const hasText = f.value.trim().length > 0;
+      const body = el(`<div class="note-body${hasText ? '' : ' empty'}"></div>`);
+      body.textContent = hasText ? f.value : 'Tap to add…';
+      wrap.appendChild(body);
+      wrap.onclick = () => openNoteEditor(me, f, fields);
+      box.appendChild(wrap);
+    }
     return box;
+  }
+
+  // Full-screen editor for a single gear/notes field. Closing the overlay saves.
+  function openNoteEditor(me, field, allFields) {
+    const overlay = el(`<div class="note-editor"></div>`);
+    const bar = el(`<div class="note-editor-bar"></div>`);
+    bar.appendChild(el(`<span class="note-editor-title">${field.label}</span>`));
+    const done = el(`<button class="primary">Done</button>`);
+    bar.appendChild(done);
+    const ta = el(`<textarea class="note-editor-area" placeholder="Type away…"></textarea>`);
+    ta.value = field.value;
+    overlay.append(bar, ta);
+
+    // Lock the page behind the modal at its current scroll position so closing
+    // returns the user exactly where they were (instead of jumping to the top).
+    CampfireScrollLock.lock();
+    document.body.appendChild(overlay);
+    ta.focus();
+
+    const close = () => {
+      if (ta.value !== field.value) {
+        const payload = { char_id: me.id };
+        for (const f of allFields) payload[f.key] = f.key === field.key ? ta.value : f.value;
+        conn.action('character.update_sheet', payload);
+      }
+      overlay.remove();
+      CampfireScrollLock.unlock();
+    };
+    done.onclick = close;
   }
 
   function headerSection(me) {
@@ -576,51 +627,75 @@
   }
 
   // =========================================================================
+  // NPC reveal: the GM presents a creature/NPC stat block full-screen. It pops
+  // up automatically; players can dismiss it and reopen from a banner so they
+  // can read at their leisure. A new NPC (different id) re-opens automatically.
+  // =========================================================================
+  function updateReveal() {
+    const npc = snap && snap.revealed_card;
+    if (!npc) {
+      revealNpcId = null;
+      revealDismissed = false;
+      CampfireNPCReveal.hide();
+      hideRevealBanner();
+      return;
+    }
+    if (npc.id !== revealNpcId) { revealNpcId = npc.id; revealDismissed = false; }
+    if (revealDismissed) {
+      CampfireNPCReveal.hide();
+      showRevealBanner(npc);
+      return;
+    }
+    hideRevealBanner();
+    CampfireNPCReveal.show(npc, {
+      dismissible: true,
+      onClose: () => { revealDismissed = true; updateReveal(); },
+    });
+  }
+
+  function showRevealBanner(npc) {
+    if (!revealBanner) {
+      revealBanner = el(`<button class="reveal-reopen"></button>`);
+      document.body.appendChild(revealBanner);
+    }
+    revealBanner.innerHTML = `📽 The GM is presenting: <strong>${esc(npc.name)}</strong> — tap to view`;
+    revealBanner.onclick = () => { revealDismissed = false; updateReveal(); };
+    revealBanner.style.display = 'block';
+  }
+  function hideRevealBanner() {
+    if (revealBanner) revealBanner.style.display = 'none';
+  }
+
+  // =========================================================================
   // Campfire Saga tracker
   // =========================================================================
   function renderCampfireTracker(me) {
     root.innerHTML = '';
     root.appendChild(headerSection(me));
 
-    if (me.pending_points > 0) {
-      const b = el(`<div class="banner"><strong>⭐ You earned ${me.pending_points} attribute point${me.pending_points > 1 ? 's' : ''}!</strong> Place ${me.pending_points > 1 ? 'them' : 'it'} now:</div>`);
-      const row = el(`<div class="btn-row"></div>`);
-      for (const attr of snap.config.ATTRIBUTES) {
-        const btn = el(`<button class="mini">+1 ${attr} (${me[attr]}→${me[attr] + 1})</button>`);
-        btn.disabled = me[attr] >= snap.config.CEILING;
-        btn.onclick = () => conn.action('character.spend_point', { char_id: me.id, attr });
-        row.appendChild(btn);
-      }
-      b.appendChild(row);
-      root.appendChild(b);
-    }
-
     // Attributes + drain
     const attrCard = el(`<div class="card"><h3>Attributes <span class="muted small">(your dice)</span></h3></div>`);
     for (const attr of snap.config.ATTRIBUTES) {
       const eff = me.effective[attr];
+      const wrap = el(`<div class="attr-group"></div>`);
       const row = el(`<div class="attr-row"></div>`);
       row.appendChild(el(`<span class="attr-name">${attr}${me.flavor && attr === 'magic' ? ` <span class="muted small">(${esc(me.flavor)})</span>` : ''}</span>`));
       row.appendChild(el(`<span class="attr-rank">${eff < me[attr] ? `<span class="drained">${eff}</span>` : eff}<span class="muted small">/${me[attr]}</span></span>`));
       row.appendChild(CampfireDice.renderPool({ ...me.dice[attr], blue: 0 }));
-      const drainCtl = el(`<span class="stepper"></span>`);
+      wrap.appendChild(row);
+      const drainRow = el(`<div class="btn-row" style="padding-left:8px;margin-top:4px"></div>`);
       const dPlus = el(`<button class="mini" title="drain 1 (failed action)">drain −1</button>`);
       const dMinus = el(`<button class="mini ghost" title="undo drain">undo</button>`);
       dPlus.disabled = eff <= 0;
       dMinus.disabled = me.drain[attr] <= 0;
       dPlus.onclick = () => conn.action('character.set_drain', { char_id: me.id, attr, amount: me.drain[attr] + 1 });
       dMinus.onclick = () => conn.action('character.set_drain', { char_id: me.id, attr, amount: me.drain[attr] - 1 });
-      drainCtl.append(dPlus, dMinus);
-      row.appendChild(drainCtl);
-      if (eff === 0 && me[attr] > 0) row.appendChild(el(`<span class="attr-zero">tapped out — can't act with ${attr}!</span>`));
-      attrCard.appendChild(row);
+      drainRow.append(dPlus, dMinus);
+      if (eff === 0 && me[attr] > 0) drainRow.appendChild(el(`<span class="attr-zero">tapped out — can't act with ${attr}!</span>`));
+      wrap.appendChild(drainRow);
+      attrCard.appendChild(wrap);
     }
-    const effCon = me.effective.constitution;
-    const absorb = el(`<button class="primary" style="width:100%;margin-top:10px">🛡 Absorb a failure with Constitution (${effCon} left)</button>`);
-    absorb.disabled = effCon <= 0;
-    absorb.onclick = () => conn.action('character.absorb_with_con', { char_id: me.id });
-    attrCard.appendChild(absorb);
-    if (effCon === 0) attrCard.appendChild(el(`<p class="attr-zero center small">Constitution is gone — another failure and you're down for the count.</p>`));
+    if (me.effective.constitution === 0) attrCard.appendChild(el(`<p class="attr-zero center small">Constitution is gone — another failure and you're down for the count.</p>`));
     root.appendChild(attrCard);
 
     // Blue dice
@@ -628,30 +703,20 @@
     const pool = el(`<div class="btn-row"></div>`);
     pool.appendChild(CampfireDice.renderPool({ blue: me.granted_blue }, { large: true }));
     blueCard.appendChild(pool);
-    const useBtn = el(`<button class="mini">Use a blue die</button>`);
+    const blueRow = el(`<div class="btn-row"></div>`);
+    const addBtn = el(`<button class="mini">+1 die</button>`);
+    addBtn.onclick = () => conn.action('character.grant_blue', { char_id: me.id, amount: 1 });
+    const useBtn = el(`<button class="mini ghost">Use a die</button>`);
     useBtn.disabled = me.granted_blue <= 0;
     useBtn.onclick = () => conn.action('character.grant_blue', { char_id: me.id, amount: -1 });
-    const giveRow = el(`<div class="btn-row"></div>`);
-    const allySel = el(`<select style="max-width:200px"></select>`);
-    for (const c of snap.characters) {
-      if (c.id !== me.id && c.system === 'campfire') {
-        allySel.appendChild(el(`<option value="${c.id}">${esc(c.name)}</option>`));
-      }
-    }
-    const giveBtn = el(`<button class="mini">🎁 Hand ally a blue die</button>`);
-    giveBtn.disabled = allySel.children.length === 0;
-    giveBtn.onclick = () => conn.action('character.grant_blue', { char_id: Number(allySel.value), amount: 1 });
-    giveRow.append(useBtn, allySel, giveBtn);
-    blueCard.appendChild(giveRow);
-    blueCard.appendChild(el(`<p class="muted small">Spend 2 leftover advantage (or a kind GM ruling) to gain or gift a blue die.</p>`));
+    blueRow.append(addBtn, useBtn);
+    blueCard.appendChild(blueRow);
     root.appendChild(blueCard);
 
-    root.appendChild(initiativeRibbon());
     root.appendChild(tokenRemote(me));
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));
     root.appendChild(notesSection(me));
-    root.appendChild(el(`<p class="muted small center">Encounters survived: ${me.encounters_done} · next attribute point after encounter ${Math.ceil((me.encounters_done + 1) / snap.game.reward_every_n_encounters) * snap.game.reward_every_n_encounters}</p>`));
   }
 
   // =========================================================================
@@ -870,7 +935,6 @@
     }
     root.appendChild(slotCard);
 
-    root.appendChild(initiativeRibbon());
     root.appendChild(tokenRemote(me));
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));

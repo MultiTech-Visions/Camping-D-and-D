@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campfire Saga</title>
-<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/app.css?v=4">
 </head>
 <body>
 <div class="wrap">
@@ -15,10 +15,14 @@
     <nav class="nav">
       <a href="/" class="active">Characters</a>
       <a href="/learn">How to Play</a>
-      <a href="/dm">GM Screen</a>
-      <a href="/display">Projector</a>
     </nav>
   </header>
+
+  <div class="card" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span title="So the GM knows which phone is yours">📱 <strong>This device</strong></span>
+    <input type="text" id="device-name" placeholder="e.g. Sara's phone" maxlength="60" style="flex:1;min-width:140px">
+    <button class="mini" id="device-name-save">Save</button>
+  </div>
 
   <div class="banner">
     <strong>Pick your character</strong> to open your sheet, or forge a new hero.
@@ -39,10 +43,16 @@
 <script>
 'use strict';
 const list = document.getElementById('char-list');
+const deviceNameIn = document.getElementById('device-name');
+deviceNameIn.value = CampfireWS.deviceName;
 
-CampfireWS.connect({
+const conn = CampfireWS.connect({
   role: 'player',
   onSnapshot(snap) {
+    // Sync the field to the server's stored name unless the player is editing it.
+    if (snap.device_name !== undefined && document.activeElement !== deviceNameIn) {
+      deviceNameIn.value = snap.device_name;
+    }
     list.innerHTML = '';
     if (snap.characters.length === 0) {
       list.innerHTML = '<p class="muted">No heroes yet. Be the first around the fire.</p>';
@@ -75,6 +85,13 @@ function esc(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+function saveDeviceName() {
+  conn.setDeviceName(deviceNameIn.value);
+  conn.toast('Device name saved ✓', true);
+}
+document.getElementById('device-name-save').onclick = saveDeviceName;
+deviceNameIn.onkeydown = (ev) => { if (ev.key === 'Enter') { deviceNameIn.blur(); saveDeviceName(); } };
+
 document.getElementById('new-campfire').onclick = () => {
   localStorage.removeItem('campfire_char_id');
   location.href = '/play?new=campfire';
