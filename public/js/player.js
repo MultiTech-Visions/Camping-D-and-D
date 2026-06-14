@@ -17,6 +17,11 @@
   let revealNpcId = null;       // id of the NPC the GM is currently presenting (or null)
   let revealDismissed = false;  // player closed the reveal — show a reopen banner instead
   let revealBanner = null;
+  // 📚 Knowledge: the shared library of revealed locations/NPCs the party can
+  // revisit. knowledgeOpen drives the screen; viewingKnowledgeId is set while a
+  // saved entry's reveal is open so a live GM reveal can't stomp it.
+  let knowledgeOpen = params.get('view') === 'knowledge';
+  let viewingKnowledgeId = null;
 
   const conn = CampfireWS.connect({
     role: 'player',
@@ -77,6 +82,7 @@
 
   function render() {
     if (!snap) return;
+    if (knowledgeOpen) return renderKnowledge();
     const me = myChar();
     if (builderSystem === 'campfire') return renderCampfireBuilder();
     if (builderSystem === 'dnd5e') return renderDndBuilder();
@@ -632,6 +638,17 @@
   // can read at their leisure. A new NPC (different id) re-opens automatically.
   // =========================================================================
   function updateReveal() {
+    // While the player is browsing a saved Knowledge entry, that reveal owns the
+    // screen — don't let a live GM reveal stomp it. Keep its content fresh; if the
+    // entry stops being known, fall through to the normal GM-reveal handling.
+    if (viewingKnowledgeId !== null) {
+      const card = ((snap && snap.known_cards) || []).find((c) => c.id === viewingKnowledgeId);
+      if (card) {
+        if (CampfireNPCReveal.isOpen()) CampfireNPCReveal.update(card);
+        return;
+      }
+      viewingKnowledgeId = null;
+    }
     const npc = snap && snap.revealed_card;
     if (!npc) {
       revealNpcId = null;
@@ -664,6 +681,70 @@
   }
   function hideRevealBanner() {
     if (revealBanner) revealBanner.style.display = 'none';
+  }
+
+  // =========================================================================
+  // 📚 Knowledge: the party's shared field journal. Every location the GM has
+  // marked visited and every NPC marked seen lands here, and tapping one replays
+  // the exact reveal screen the table was shown — players' notes, kept for them.
+  // =========================================================================
+  function openKnowledge() {
+    knowledgeOpen = true;
+    history.replaceState(null, '', '/play?view=knowledge');
+    render();
+  }
+  function closeKnowledge() {
+    knowledgeOpen = false;
+    history.replaceState(null, '', '/play');
+    render();
+  }
+
+  // Open a saved entry full-screen using the very same reveal component the GM
+  // drives — same art, same revealed sections. Closing returns to the list (and
+  // restores any live GM reveal that was underneath).
+  function openKnowledgeCard(card) {
+    viewingKnowledgeId = card.id;
+    hideRevealBanner();
+    CampfireNPCReveal.show(card, {
+      dismissible: true,
+      onClose: () => { viewingKnowledgeId = null; updateReveal(); },
+    });
+  }
+
+  function renderKnowledge() {
+    root.innerHTML = '';
+    const head = el(`<div class="card-head"><h2 style="margin-top:6px;border:none">📚 Knowledge</h2></div>`);
+    const back = el(`<button class="mini ghost" title="back to your sheet">← My sheet</button>`);
+    back.onclick = closeKnowledge;
+    head.appendChild(back);
+    root.appendChild(head);
+    root.appendChild(el(`<p class="muted small">Places you've been and faces you've met. Tap any entry to see it again.</p>`));
+
+    const cards = (snap.known_cards || []).slice();
+    if (cards.length === 0) {
+      root.appendChild(el(`<div class="banner">Nothing here yet — the GM hasn't revealed any locations or NPCs to remember.</div>`));
+      return;
+    }
+    // group by kind so locations and the people you've met read as separate logs
+    const groups = [
+      { kind: 'location', icon: '🌍', title: 'Locations', empty: 'No places yet.' },
+      { kind: 'npc', icon: '🐲', title: 'People & creatures', empty: 'No faces yet.' },
+    ];
+    for (const g of groups) {
+      const mine = cards.filter((c) => c.kind === g.kind).sort((a, b) => a.name.localeCompare(b.name));
+      if (mine.length === 0) continue;
+      const box = el(`<div class="card"><h3>${g.icon} ${g.title} <span class="muted small">(${mine.length})</span></h3></div>`);
+      for (const c of mine) {
+        const thumb = c.images && c.images[0];
+        const row = el(`<button class="attr-row" style="align-items:center;width:100%;text-align:left;background:none;border:none;cursor:pointer;padding:8px 0"></button>`);
+        row.appendChild(el(`<span class="npc-thumb ${thumb ? '' : 'placeholder'}" style="${thumb ? `background-image:url('${thumb}');background-size:cover;background-position:center` : ''}">${thumb ? '' : g.icon}</span>`));
+        row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1;margin-left:10px">${esc(c.name)}${c.subtitle ? ` <span class="muted small">— ${esc(c.subtitle)}</span>` : ''}</span>`));
+        row.appendChild(el(`<span class="muted">›</span>`));
+        row.onclick = () => openKnowledgeCard(c);
+        box.appendChild(row);
+      }
+      root.appendChild(box);
+    }
   }
 
   // =========================================================================
