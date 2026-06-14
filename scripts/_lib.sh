@@ -77,7 +77,7 @@ print_urls() {
   echo
   echo -e "${BOLD}   Point phones (on the same WiFi) at:${RESET}"
   echo -e "      players   ${GREEN}http://$ip:3000/${RESET}"
-  echo -e "      GM screen ${GREEN}http://$ip:3000/dm${RESET}"
+  echo -e "      GM screen ${GREEN}http://$ip:3001/dm${RESET}"
   echo -e "      learn     ${GREEN}http://$ip:3000/learn${RESET}"
   echo -e "      projector ${GREEN}http://localhost:3000/display${RESET} (on the Pi itself)"
   echo

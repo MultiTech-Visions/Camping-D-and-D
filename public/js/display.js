@@ -32,6 +32,52 @@
   }
 
   // ------------------------------------------------------------------------
+  // Screen transition: a quick splash that fades over the moment the projector
+  // swaps between screens (reveal ↔ map ↔ home, or one reveal to another), like
+  // a broadcast bumper. Uses the GM's uploaded image, or a branded default.
+  // ------------------------------------------------------------------------
+  let transitionEl = null;
+  let transitionImg = null;
+  let transitionTimer = null;
+  let lastScreenKey = null;
+  function screenKeyOf(snap) {
+    if (snap.revealed_card) return 'reveal:' + snap.revealed_card.id;
+    if (snap.map) return 'map:' + snap.map.id;
+    return 'home';
+  }
+  function ensureTransitionEl() {
+    if (transitionEl) return;
+    transitionEl = el(`<div id="screen-transition"><div class="screen-transition-inner"></div></div>`);
+    transitionImg = transitionEl.firstChild;
+    document.body.appendChild(transitionEl);
+  }
+  function playTransition(snap) {
+    ensureTransitionEl();
+    // the splash image is chosen by the kind of reveal we're moving TO; map/home
+    // (or a kind with no uploaded image) gets a soft direct fade instead.
+    const imgs = (snap.settings && snap.settings.transition_images) || {};
+    const kind = snap.revealed_card ? snap.revealed_card.kind : null;
+    const img = (kind && imgs[kind]) || '';
+    if (img) {
+      transitionEl.classList.remove('blank');
+      transitionImg.className = 'screen-transition-inner has-image';
+      transitionImg.style.backgroundImage = `url('${img}')`;
+      transitionImg.textContent = '';
+    } else {
+      transitionEl.classList.add('blank'); // soft dim crossfade, no splash
+      transitionImg.className = 'screen-transition-inner';
+      transitionImg.style.backgroundImage = '';
+      transitionImg.textContent = '';
+    }
+    // force a reflow so re-triggering mid-fade restarts cleanly
+    void transitionEl.offsetWidth;
+    transitionEl.classList.add('show');
+    clearTimeout(transitionTimer);
+    const ms = (snap.settings && snap.settings.transition_ms) || 520;
+    transitionTimer = setTimeout(() => transitionEl.classList.remove('show'), ms);
+  }
+
+  // ------------------------------------------------------------------------
   // PixiJS map renderer (created lazily; torn down when the map turns off)
   // ------------------------------------------------------------------------
   const pixi = {
@@ -332,6 +378,22 @@
     role: 'display',
     onSnapshot(snap) {
       reportViewport();
+
+      // Bump a splash over the swap when the projected screen changes. Fire it
+      // BEFORE applying the new content so the cover rises as things change (no
+      // first-frame flash of the new screen). Skipped on the very first snapshot.
+      const screenKey = screenKeyOf(snap);
+      if (lastScreenKey !== null && screenKey !== lastScreenKey
+          && snap.settings && snap.settings.transitions_enabled !== false) {
+        playTransition(snap);
+      }
+      lastScreenKey = screenKey;
+
+      // Full-screen NPC reveal sits above everything; the GM toggles entries
+      // live and this re-renders in place (same id) without restarting slides.
+      if (snap.revealed_card) CampfireNPCReveal.show(snap.revealed_card, { dismissible: false });
+      else CampfireNPCReveal.hide();
+
       const mapMode = snap.map !== null;
       document.body.classList.toggle('map-mode', mapMode);
       mapRoot.classList.toggle('on', mapMode);
@@ -394,8 +456,11 @@
       // simple gray box for non-character entries: name (+ visible conditions),
       // same turn highlight
       function customCard(e, isTurn) {
-        const card = el(`<div class="card ${isTurn ? 'turn-active' : ''}" style="background:#33343a">
-          <strong style="color:#fff">${isTurn ? '▶ ' : ''}${esc(e.label)}</strong></div>`);
+        const card = el(`<div class="card ${isTurn ? 'turn-active' : ''}" style="background:#33343a"></div>`);
+        const face = e.art
+          ? `<span style="display:inline-block;width:34px;height:34px;border-radius:50%;background-image:url('${e.art}');background-size:cover;background-position:center;border:2px solid var(--ember-deep);vertical-align:middle;margin-right:6px"></span>`
+          : '';
+        card.appendChild(el(`<strong style="color:#fff;display:flex;align-items:center">${face}${isTurn ? '▶ ' : ''}${esc(e.label)}</strong>`));
         if (e.conditions.length > 0) {
           card.appendChild(el(`<div class="small muted">${e.conditions.map((x) => esc(x.kind)).join(' · ')}</div>`));
         }

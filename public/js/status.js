@@ -1,11 +1,12 @@
 'use strict';
 
-// The Pi's system screen: WiFi join QR + game URL QR + live connection counts.
+// The Pi's system screen: WiFi join QR + player QR + GM QR + live connection counts.
 // Polls /status.json; only re-renders the QR codes when something changed.
 
 (function () {
   const wifiArea = document.getElementById('wifi-area');
-  const gameArea = document.getElementById('game-area');
+  const playerArea = document.getElementById('player-area');
+  const gmArea = document.getElementById('gm-area');
   const who = document.getElementById('who');
   let lastKey = '';
 
@@ -35,27 +36,39 @@
       if (st.hotspot.active === true) {
         wifiArea.insertAdjacentHTML('beforeend',
           `<p class="big">Scan with your phone's camera:</p>`);
-        qrInto(wifiArea, `WIFI:T:WPA;S:${st.hotspot.SSID};P:${st.hotspot.PASSWORD};;`, 220);
+        qrInto(wifiArea, `WIFI:T:WPA;S:${st.hotspot.SSID};P:${st.hotspot.PASSWORD};;`, 200);
         wifiArea.insertAdjacentHTML('beforeend',
           `<p>or join by hand — network <strong class="url-line">${st.hotspot.SSID}</strong><br>password <strong class="url-line">${st.hotspot.PASSWORD}</strong></p>`);
       } else if (st.hotspot.active === false) {
         wifiArea.insertAdjacentHTML('beforeend',
           `<p class="big">✓ The Pi is on the regular WiFi.</p>
-           <p class="muted">Phones just join the same WiFi network as always — then go to step 2.</p>`);
+           <p class="muted">Phones just join the same WiFi network as always — then scan step 2.</p>`);
       } else {
         wifiArea.insertAdjacentHTML('beforeend',
           `<p class="muted">Couldn't read the WiFi state — phones need to be on the same network as this machine.</p>`);
       }
 
-      // --- game panel ---
-      gameArea.innerHTML = '';
+      // --- player panel ---
+      playerArea.innerHTML = '';
       if (addr) {
         const url = `http://${addr}:${st.port}/`;
-        gameArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open the game:</p>`);
-        qrInto(gameArea, url, 220);
-        gameArea.insertAdjacentHTML('beforeend', `<p>or type it in:<br><span class="url-line">${url}</span></p>`);
+        playerArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open the game:</p>`);
+        qrInto(playerArea, url, 200);
+        playerArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
       } else {
-        gameArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
+        playerArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
+      }
+
+      // --- GM panel ---
+      gmArea.innerHTML = '';
+      if (addr) {
+        const gmPort = st.gm_port || (st.port + 1);
+        const url = `http://${addr}:${gmPort}/dm`;
+        gmArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open GM screen:</p>`);
+        qrInto(gmArea, url, 200);
+        gmArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
+      } else {
+        gmArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
       }
     }
 

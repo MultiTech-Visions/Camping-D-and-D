@@ -1,6 +1,9 @@
 'use strict';
 
 // Campfire Saga server entry: Express (HTTP + static) + ws (WebSockets).
+// Two separate HTTP servers share one WebSocket broadcast pool:
+//   PORT     (3000) — player-facing: /, /play, /learn, /display, /upload/token
+//   GM_PORT  (3001) — GM-only:       /dm, /status, /upload/map, /learn, /display
 // Logs every line to stdout AND logs/server.log so a closed terminal never
 // loses history — open logs/server.log to see what happened on the last run.
 
@@ -33,20 +36,73 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
-// --- HTTP --------------------------------------------------------------------
-const app = express();
+// --- shared helpers ----------------------------------------------------------
 const PUBLIC_DIR = path.join(__dirname, 'public');
-
-const pages = { '/': 'index.html', '/play': 'player.html', '/dm': 'dm.html', '/display': 'display.html', '/learn': 'learn.html', '/status': 'status.html' };
-for (const [route, file] of Object.entries(pages)) {
-  app.get(route, (req, res) => res.sendFile(path.join(PUBLIC_DIR, file)));
-}
-app.use(express.static(PUBLIC_DIR));
-
-// Map upload (Phase 3). The GM's browser measures the image dimensions and
-// sends the raw bytes; calibration follows over WebSocket (map.calibrate).
 const UPLOAD_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
-app.post('/upload/map',
+
+function page(file) {
+  return (req, res) => res.sendFile(path.join(PUBLIC_DIR, file));
+}
+
+function lanAddresses() {
+  const out = [];
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces) {
+      if (iface.family === 'IPv4' && !iface.internal) out.push(iface.address);
+    }
+  }
+  return out;
+}
+
+// --- player app (port 3000) --------------------------------------------------
+const playerApp = express();
+
+playerApp.get('/', page('index.html'));
+playerApp.get('/play', page('player.html'));
+playerApp.get('/learn', page('learn.html'));
+playerApp.get('/display', page('display.html'));
+
+// Token art upload: players and GM both use this endpoint on the player port.
+playerApp.post('/upload/token',
+  express.raw({ type: Object.keys(UPLOAD_TYPES), limit: 10 * 1024 * 1024 }),
+  (req, res) => {
+    const ext = UPLOAD_TYPES[req.headers['content-type']];
+    if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
+    const name = `token-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
+    log(`token art uploaded: ${name} (${req.body.length} bytes)`);
+    res.json({ art: `/assets/tokens/${name}` });
+  });
+
+playerApp.use(express.static(PUBLIC_DIR));
+
+// --- GM app (port 3001) ------------------------------------------------------
+const gmApp = express();
+const { execFile } = require('child_process');
+
+gmApp.get('/dm', page('dm.html'));
+gmApp.get('/display', page('display.html'));
+gmApp.get('/learn', page('learn.html'));
+gmApp.get('/status', page('status.html'));
+
+// Token art upload: also available on the GM port so the GM can upload token art
+// from port 3001 without needing to switch to the player port.
+gmApp.post('/upload/token',
+  express.raw({ type: Object.keys(UPLOAD_TYPES), limit: 10 * 1024 * 1024 }),
+  (req, res) => {
+    const ext = UPLOAD_TYPES[req.headers['content-type']];
+    if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
+    const name = `token-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
+    log(`token art uploaded (GM port): ${name} (${req.body.length} bytes)`);
+    res.json({ art: `/assets/tokens/${name}` });
+  });
+
+// Map upload (GM only). The GM's browser measures the image dimensions and
+// sends the raw bytes; calibration follows over WebSocket (map.calibrate).
+gmApp.post('/upload/map',
   express.raw({ type: Object.keys(UPLOAD_TYPES), limit: config.MAP_MAX_BYTES }),
   (req, res) => {
     const ext = UPLOAD_TYPES[req.headers['content-type']];
@@ -63,36 +119,28 @@ app.post('/upload/map',
     res.json({ image_path: `/assets/maps/${name}`, image_w: w, image_h: h });
   });
 
-// Token art upload: same raw-bytes scheme; the sprite is sized by the token's
-// footprint so no dimensions are needed.
-app.post('/upload/token',
-  express.raw({ type: Object.keys(UPLOAD_TYPES), limit: 10 * 1024 * 1024 }),
-  (req, res) => {
-    const ext = UPLOAD_TYPES[req.headers['content-type']];
-    if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
-    const name = `token-${Date.now()}.${ext}`;
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
-    log(`token art uploaded: ${name} (${req.body.length} bytes)`);
-    res.json({ art: `/assets/tokens/${name}` });
-  });
+gmApp.use(express.static(PUBLIC_DIR, { index: false }));
 
-const server = http.createServer(app);
-const wss = ws.attach(server, log);
+// --- HTTP servers + WebSockets -----------------------------------------------
+const playerServer = http.createServer(playerApp);
+const gmServer = http.createServer(gmApp);
 
-// Live system info for the /status screen (the "system window" START.sh opens
-// on the Pi): addresses, hotspot state, and who's connected.
-const { execFile } = require('child_process');
-app.get('/status.json', (req, res) => {
+// Both servers share the same allClients pool inside ws.js so a GM action
+// on port 3001 immediately pushes snapshots to players on port 3000.
+ws.attach(playerServer, log);
+const wssGM = ws.attach(gmServer, log);
+
+// Live system info for the /status screen.
+gmApp.get('/status.json', (req, res) => {
   const clients = { player: 0, dm: 0, display: 0 };
-  for (const c of wss.clients) {
+  for (const c of ws.allClients) {
     if (c.role && clients[c.role] !== undefined) clients[c.role]++;
   }
   execFile('nmcli', ['-t', '-f', 'NAME', 'connection', 'show', '--active'], (err, stdout) => {
-    // null = "couldn't ask NetworkManager" (e.g. dev machine) — shown as unknown.
     const hotspotActive = err ? null : stdout.split('\n').includes('Hotspot');
     res.json({
       port: config.PORT,
+      gm_port: config.GM_PORT,
       addresses: lanAddresses(),
       hotspot: { ...config.HOTSPOT, active: hotspotActive },
       clients,
@@ -101,24 +149,19 @@ app.get('/status.json', (req, res) => {
   });
 });
 
-function lanAddresses() {
-  const out = [];
-  for (const ifaces of Object.values(os.networkInterfaces())) {
-    for (const iface of ifaces) {
-      if (iface.family === 'IPv4' && !iface.internal) out.push(iface.address);
-    }
-  }
-  return out;
-}
-
-server.listen(config.PORT, () => {
+// --- start -------------------------------------------------------------------
+playerServer.listen(config.PORT, () => {
   log('========================================');
-  log(`Campfire Saga is burning bright on port ${config.PORT}`);
+  log(`Campfire Saga is burning bright`);
   for (const addr of lanAddresses()) {
     log(`  players  → http://${addr}:${config.PORT}/`);
-    log(`  GM       → http://${addr}:${config.PORT}/dm`);
+    log(`  GM       → http://${addr}:${config.GM_PORT}/dm`);
     log(`  display  → http://${addr}:${config.PORT}/display`);
     log(`  learn    → http://${addr}:${config.PORT}/learn`);
   }
   log('========================================');
+});
+
+gmServer.listen(config.GM_PORT, () => {
+  log(`GM server listening on port ${config.GM_PORT}`);
 });

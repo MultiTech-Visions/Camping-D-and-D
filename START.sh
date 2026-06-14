@@ -26,7 +26,8 @@ fi
 say "Waiting for the server to answer…"
 up=0
 for _ in $(seq 1 20); do
-  curl -fsS --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && { up=1; break; }
+  curl -fsS --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && \
+  curl -fsS --max-time 1 http://localhost:3001/dm >/dev/null 2>&1 && { up=1; break; }
   sleep 0.5
 done
 [ "$up" = 1 ] || fail "server did not come up — last lines of logs/server.log:
@@ -53,7 +54,7 @@ else
 fi
 
 # --- 3. the system window -----------------------------------------------------
-STATUS_URL="http://localhost:3000/status"
+STATUS_URL="http://localhost:3001/status"
 BROWSER=""
 for candidate in chromium-browser chromium firefox; do
   command -v "$candidate" >/dev/null && { BROWSER="$candidate"; break; }

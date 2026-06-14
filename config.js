@@ -6,6 +6,7 @@
 
 module.exports = {
   PORT: 3000,
+  GM_PORT: 3001,
 
   // --- Campsite WiFi hotspot (START.sh turns it on when no WiFi is around;
   //     the /status screen shows a join-QR for it) ---
@@ -27,6 +28,12 @@ module.exports = {
 
   // --- Game systems a character can belong to ---
   SYSTEMS: ['campfire', 'dnd5e'],
+
+  // --- Reveal cards: prepared NPCs, locations, and story beats share one
+  //     full-screen reveal mechanism (images + toggleable text sections) ---
+  CARD_KINDS: ['npc', 'location', 'story'],
+  // particle effect choices for the full-screen splash background
+  NPC_EFFECTS: ['none', 'embers', 'snow', 'rain', 'motes', 'arcane'],
 
   // --- Built-in condition sets, per system (custom conditions are post-MVP) ---
   CONDITIONS: {

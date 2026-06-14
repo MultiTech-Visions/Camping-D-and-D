@@ -13,8 +13,9 @@ It speaks two systems:
   auto-modifiers, AC, HP with damage/heal/temp, death saves, spell slots, inspiration,
   conditions. Generic enough for most d20-style games.
 
-Clocks, initiative, the GM screen, and the projector display are **system-agnostic** —
-mix Campfire heroes and D&D characters in the same session if you like.
+Clocks, initiative, the GM screen, the **reveal cards** (full-screen NPC / location /
+story splashes), and the projector display are **system-agnostic** — mix Campfire
+heroes and D&D characters in the same session if you like.
 
 ---
 
@@ -43,23 +44,60 @@ boot. START.sh when it's game time, STOP.sh when you're done.
 ## 🏕 At the campsite
 
 1. Power the Pi and double-click **START.sh**. That's it.
-2. The system window appears with two QR codes: **scan #1** with a phone camera to
+2. The system window appears with three QR codes: **scan #1** with a phone camera to
    join the WiFi (`CampfireSaga` / password `tellmeastory`), **scan #2** to open the
-   game. (At home, where the Pi already has WiFi, step #1 just says "join the same
-   network".) Then turn the Pi's screen off — nobody looks at it again.
-3. On their phones, players pick **This is me** or forge a new hero; the GM opens
-   **/dm**.
+   game (players), **scan #3** for the GM screen. (At home, where the Pi already has
+   WiFi, step #1 just says "join the same network".) Then turn the Pi's screen off —
+   nobody looks at it again.
+3. On their phones, players name their device and pick **This is me** or forge a new
+   hero; the GM scans the GM QR (the **/dm** screen lives on its own port — see below).
 4. At night, HDMI into the projector and tap **"Switch this screen to the projector
    display"** on the system window (or browse to `/display`).
 
-| Page | Who | What |
-|---|---|---|
-| `/` | everyone | pick or create a character |
-| `/play` | players | character sheet + tracker |
-| `/dm` | the GM | every character (including secrets), drain/HP controls, initiative, clocks, settings |
-| `/display` | the projector | turn order, party roster, visible clocks, drifting embers |
-| `/learn` | everyone | how to play Campfire Saga, with the dice cheat sheet |
-| `/status` | the Pi itself | the system window START.sh opens: WiFi + game QR codes, who's connected |
+The app runs **two web servers on one Pi**: the player side on port **3000** and the
+GM side on port **3001**. The GM URL simply doesn't serve character creation or the
+player sheet, so handing someone the projector or sharing a screen can't leak the GM
+controls. Both sides talk over the same live connection, so a GM action shows up on
+every phone instantly.
+
+| Page | Port | Who | What |
+|---|---|---|---|
+| `/` | 3000 | everyone | name this device, then pick or create a character |
+| `/play` | 3000 | players | character sheet + tracker; reveal cards pop up here |
+| `/dm` | 3001 | the GM | every character (including secrets), drain/HP controls, initiative, clocks, the reveal-card library, devices, and settings |
+| `/display` | both | the projector | turn order, party roster, visible clocks, drifting embers, and full-screen reveal cards |
+| `/learn` | both | everyone | how to play Campfire Saga, with the dice cheat sheet |
+| `/status` | 3001 | the Pi itself | the system window START.sh opens: WiFi + player + GM QR codes, who's connected |
+
+## 🎴 Reveal cards (NPCs, locations & story beats)
+
+The GM prepares **cards** ahead of time and reveals them full-screen on the projector
+and every player's phone — a video-game-style splash with a framed, cross-fading
+portrait on the left and a scrolling info column on the right. There are three kinds,
+all built and revealed the same way:
+
+- **🐲 NPC / monster** — a stat-block reveal; the first image doubles as a map token,
+  so you can "place on map" straight from the library.
+- **🌍 Location** — set the scene when the party arrives somewhere; mark places visited.
+- **📖 Story** — a narrated beat or handout you walk the table through.
+
+Each card holds a name, subtitle, GM-only notes, a slideshow of uploaded images, and
+text **sections** of **entries**. During play the GM toggles individual entries on and
+off, so a scene unfolds live; spotlights a section or single entry; pauses or speeds the
+auto-scrolling crawl; holds a specific image; and toggles a glowing connector line that
+ties a caption to the picture it describes. Players get a dismissible copy they can read
+at their own pace (with a banner to reopen it); the projector shows it locked and
+crawling. GM notes and hidden entries never reach players. Each card has a backdrop and a
+**particle effect** — embers, snow, rain, motes, or arcane — and the projector plays a
+short transition splash when it swaps between screens. Tune scroll speed, particles, and
+the transition splashes in the GM **Settings** panel.
+
+## 📱 Devices
+
+Every phone names itself once ("Sara's phone") and quietly remembers who it is. A phone
+only shows its own characters, and the GM's **Devices** panel lists every device — online
+or offline — with the characters linked to each, so you can rename, forget, link, or
+unlink a hero from a phone without anyone retyping anything.
 
 ## 📜 Logs (when something looks weird)
 
@@ -91,16 +129,25 @@ Vanilla JS, no frameworks, no build step. Node 18+, Express + `ws` + `better-sql
 The server is the single source of truth: clients send `{type:"action", op, payload}`
 over one WebSocket; the server validates (fail-loud — invalid state throws), persists
 to SQLite, and broadcasts role-scoped snapshots (players never receive another
-player's `hidden_desire` or `dm_only` clocks — enforced server-side).
+player's `hidden_desire`, a card's GM notes/hidden entries, or `dm_only` clocks —
+enforced server-side).
+
+Two HTTP servers share **one** WebSocket pool: the player app on `PORT` (3000) and the
+GM app on `GM_PORT` (3001). The split is route-level — the GM app never registers the
+player routes — so a GM action on 3001 still snapshots out to players on 3000 because
+`ws.js` keeps a single shared client set across both servers. Each browser mints a
+persistent device UUID (localStorage) and sends it in `hello`; characters are scoped to
+their `device_id`, and `ws.js` flips a device online/offline on connect/disconnect.
 
 ```
-server.js        entry: Express + ws + logging
-config.js        tunable constants (creation points, reward rate default, conditions…)
+server.js        entry: two Express apps (player :3000 + GM :3001), ws, logging
+config.js        tunable constants (PORT/GM_PORT, card kinds, particle effects, conditions…)
 rules.js         pure rule helpers (diceForRank — THE rank→dice mapping)
-db.js            better-sqlite3 schema + prepared statements
+db.js            better-sqlite3 schema + prepared statements (card, device, token tables…)
 state.js         in-memory canonical state, all ops, role-scoped snapshots
-ws.js            websocket plumbing: hello/snapshot/action/error
-public/          the six pages + shared js (ws-client, dice/clock renderers)
+ws.js            websocket plumbing: hello/snapshot/action/error; shared client pool + device presence
+public/          the pages + shared js (ws-client, dice/clock renderers,
+                 npc-reveal.js + npc-fx.js drive the reveal cards & particles)
 *.sh             the double-click toolkit (INSTALL/START/STOP/UPDATE — all tee
                  their output into logs/); scripts/_lib.sh is the shared plumbing
 systemd/         service template (installer fills in user + path)
@@ -110,17 +157,19 @@ test/smoke.js    self-test run by install + update against a throwaway DB
 Run the self-test any time: `node test/smoke.js`.
 
 **Roadmap** (per `HANDOFF.md` phases): Phase 1 (playable core + teaching page) ✅ ·
-Phase 2 (initiative + clocks) ✅ · Phase 3 (projector battle map) ✅ · Phase 4 has a
-head start (animated glow tokens already render). The map is system-agnostic by
-design — tokens and the grid know nothing about game rules.
+Phase 2 (initiative + clocks) ✅ · Phase 3 (projector battle map) ✅ · Phase 4
+(cinematic presentation — reveal cards, particle effects, projector transitions) ✅.
+The map and reveal cards are system-agnostic by design — tokens, the grid, and the
+cards know nothing about game rules.
 
 ### The battle map (Phase 3)
 
 All from the GM screen on a phone: **upload** a map image → **calibrate** by tapping
 the top-left and bottom-right corners of a clean span of squares and saying how many
 cells it covers → the map goes live on the projector. Tokens (players, monsters,
-terrain, pulsing glow lights) live in **grid coordinates**; players get a d-pad on
-their sheet to walk their own token. The camera is a pure view transform — minimap
+terrain, pulsing glow lights) live in **grid coordinates** and belong to a specific
+map, so switching the active map swaps in that map's own tokens; players get a d-pad
+on their sheet to walk their own token. The camera is a pure view transform — minimap
 tap-to-aim, nudge/zoom/rotate buttons, and named view bookmarks to snap between.
 Initiative accepts **anything**, not just characters — type "Goblin Pack" or "The
 Ritual" and it slots into the turn order. Switching the map off returns the

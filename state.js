@@ -29,13 +29,40 @@ const state = {
   entryConditions: new Map(), // entry_id -> [{id, kind, visibility}] for custom initiative entries
   maps: new Map(),
   tokens: new Map(),
+  cards: new Map(),    // id -> reveal card { id, kind, name, subtitle, notes, images[], sections[], token_*, bg_*, visited } — NPCs/locations/story
   camera: null,
   camera_bookmarks: [],
   custom_colors: [], // GM's saved token colors ('#rrggbb'), persisted in runtime
+  // GM-tunable global settings (UX/feel knobs), persisted in runtime.
+  settings: {
+    // per-reveal-kind splash images shown when the projector swaps screens. A
+    // kind with no image just does a soft direct fade instead of a splash.
+    transition_images: { npc: '', location: '', story: '' },
+    transitions_enabled: true,  // play transitions at all
+    transition_ms: 520,         // how long the splash/fade lingers (ms)
+    scroll_speed: 1,            // multiplier for the projector text auto-crawl speed
+    particles_enabled: true,    // global on/off for the reveal particle effects
+  },
   used_conditions: [], // every condition name the GM has used — quick-fill suggestions
+  devices: new Map(),  // device_id -> { id, name } — player phones/tablets, named by their owner
   // Reported by the display client so the GM minimap can draw the exact
   // projected rectangle. Memory-only: the display re-reports on reconnect.
   display_viewport: null,
+  // Which image of the revealed NPC the GM is holding on the projector (from
+  // their viewer). null = let the reveal run its auto slideshow. Memory-only:
+  // it's tied to the GM having their control window open, so a restart sensibly
+  // falls back to the slideshow.
+  reveal_image_index: null,
+  // (connector-line on/off is now a per-card, persisted property — see card.show_link)
+  // GM-driven slow auto-scroll of the reveal's text column on the PROJECTOR. When
+  // paused the crawl holds where it is so the GM can dwell on what's on screen.
+  // Memory-only; a fresh reveal starts unpaused.
+  reveal_scroll_paused: false,
+  // GM "focus" — { section, entry } into the PUBLIC (visible) sections/entries of
+  // the revealed card. entry null = the whole section. The projector scrolls to
+  // it and lifts it above the dimmed rest; null = no focus. Memory-only; cleared
+  // on a fresh reveal.
+  reveal_focus: null,
   game: null,
 };
 
@@ -48,7 +75,11 @@ function zeroDrain() {
 function load() {
   const game = stmts.getGame.get();
   R.assert(game, 'corrupt DB: game singleton row missing');
-  state.game = { reward_every_n_encounters: game.reward_every_n_encounters, active_map_id: game.active_map_id };
+  state.game = {
+    reward_every_n_encounters: game.reward_every_n_encounters,
+    active_map_id: game.active_map_id,
+    revealed_card_id: game.revealed_card_id == null ? null : game.revealed_card_id,
+  };
 
   const runtime = JSON.parse(stmts.getRuntime.get().json);
   R.assert(runtime && runtime.perChar, 'corrupt DB: runtime row malformed');
@@ -108,6 +139,23 @@ function load() {
   state.tokens.clear();
   for (const row of stmts.allTokens.all()) state.tokens.set(row.id, row);
 
+  state.cards.clear();
+  for (const row of stmts.allCards.all()) {
+    state.cards.set(row.id, {
+      id: row.id, kind: row.kind, name: row.name, subtitle: row.subtitle, notes: row.notes,
+      images: JSON.parse(row.images), sections: JSON.parse(row.sections),
+      token_w: row.token_w, token_h: row.token_h, token_shape: row.token_shape,
+      bg_image: row.bg_image, bg_effect: row.bg_effect, visited: !!row.visited,
+      images_slides: row.images_slides === undefined ? true : !!row.images_slides,
+      show_link: row.show_link === undefined ? true : !!row.show_link,
+    });
+  }
+  // A revealed card that was since deleted leaves a dangling pointer — clear it.
+  if (state.game.revealed_card_id !== null && !state.cards.has(state.game.revealed_card_id)) {
+    state.game.revealed_card_id = null;
+    stmts.updateGame.run(state.game);
+  }
+
   // --- initiative: load, with one-time migration from the pre-custom-entries
   //     format ({order:[char_id], turn_char_id}) to entry objects. -----------
   let init = runtime.initiative;
@@ -123,7 +171,14 @@ function load() {
   // Entries saved before per-entry visibility existed migrate to 'visible'.
   state.initiative.entries = init.entries
     .filter((e) => e.char_id === null || state.characters.has(e.char_id))
-    .map((e) => ({ ...e, visibility: e.visibility === undefined ? 'visible' : e.visibility }));
+    .map((e) => ({
+      ...e,
+      visibility: e.visibility === undefined ? 'visible' : e.visibility,
+      art: e.art === undefined || e.art === null ? '' : e.art,
+      w: e.w === undefined ? 1 : e.w,
+      h: e.h === undefined ? 1 : e.h,
+      shape: e.shape === undefined ? 'circle' : e.shape,
+    }));
   state.initiative.turn_id = state.initiative.entries.some((e) => e.id === init.turn_id) ? init.turn_id : null;
   for (const e of state.initiative.entries) {
     if (e.id.startsWith('custom:')) {
@@ -147,7 +202,21 @@ function load() {
     .map((b) => (b.map_id === undefined ? { ...b, map_id: game.active_map_id } : b))
     .filter((b) => b.map_id !== null && state.maps.has(b.map_id));
   state.custom_colors = Array.isArray(runtime.custom_colors) ? runtime.custom_colors : [];
+  const rs = runtime.settings || {};
+  const clampNum = (v, lo, hi, dflt) => (typeof v === 'number' && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
+  const safeImg = (v) => (typeof v === 'string' && (v === '' || /^\/assets\/tokens\/[\w.-]+$/.test(v))) ? v : '';
+  const ti = rs.transition_images || {};
+  state.settings = {
+    transition_images: { npc: safeImg(ti.npc), location: safeImg(ti.location), story: safeImg(ti.story) },
+    transitions_enabled: rs.transitions_enabled !== false,
+    transition_ms: clampNum(rs.transition_ms, 200, 3000, 520),
+    scroll_speed: clampNum(rs.scroll_speed, 0.3, 3, 1),
+    particles_enabled: rs.particles_enabled !== false,
+  };
   state.used_conditions = Array.isArray(runtime.used_conditions) ? runtime.used_conditions : [];
+
+  state.devices.clear();
+  for (const row of stmts.allDevices.all()) state.devices.set(row.id, { id: row.id, name: row.name });
 
   if (state.game.active_map_id !== null && !state.maps.has(state.game.active_map_id)) {
     throw new Error(`corrupt DB: active_map_id ${state.game.active_map_id} references missing map`);
@@ -165,6 +234,7 @@ function persistRuntime() {
     camera: state.camera,
     camera_bookmarks: state.camera_bookmarks,
     custom_colors: state.custom_colors,
+    settings: state.settings,
     used_conditions: state.used_conditions,
   }));
 }
@@ -176,6 +246,7 @@ function persistCharacter(c) {
     gear: c.gear, notes: c.notes, encounters_done: c.encounters_done,
     pending_points: c.pending_points, system: c.system, token_art: c.token_art,
     dnd_sheet: c.system === 'dnd5e' ? JSON.stringify(c.dnd_sheet) : '',
+    device_id: c.device_id || null,
   });
 }
 
@@ -184,6 +255,27 @@ function getChar(charId) {
   const c = state.characters.get(charId);
   R.assert(c, `no character with id ${charId}`);
   return c;
+}
+
+// Record a device seen on a hello. A non-empty name (the device naming itself)
+// wins; an empty name only ensures the id exists without clobbering a prior name.
+// Returns true if the known set or a name changed (so ws.js can broadcast).
+function registerDevice(id, name) {
+  if (typeof id !== 'string' || id.length === 0) return false;
+  const existing = state.devices.get(id);
+  const cleanName = typeof name === 'string' ? name.trim().slice(0, 60) : '';
+  if (cleanName) {
+    if (existing && existing.name === cleanName) return false;
+    state.devices.set(id, { id, name: cleanName });
+    stmts.setDeviceName.run(id, cleanName);
+    return true;
+  }
+  if (!existing) {
+    state.devices.set(id, { id, name: '' });
+    stmts.ensureDevice.run(id);
+    return true;
+  }
+  return false;
 }
 
 function getClock(clockId) {
@@ -198,6 +290,69 @@ function getToken(tokenId) {
   const t = state.tokens.get(tokenId);
   R.assert(t, `no token with id ${tokenId}`);
   return t;
+}
+
+function getCard(cardId) {
+  R.assertInt(cardId, 'card_id');
+  const c = state.cards.get(cardId);
+  R.assert(c, `no card with id ${cardId}`);
+  return c;
+}
+
+function persistCard(c) {
+  stmts.updateCard.run({
+    id: c.id, name: c.name, subtitle: c.subtitle, notes: c.notes,
+    images: JSON.stringify(c.images), sections: JSON.stringify(c.sections),
+    token_w: c.token_w, token_h: c.token_h, token_shape: c.token_shape,
+    bg_image: c.bg_image, bg_effect: c.bg_effect, visited: c.visited ? 1 : 0,
+    images_slides: c.images_slides === false ? 0 : 1,
+    show_link: c.show_link === false ? 0 : 1,
+  });
+}
+
+// Card images: an ordered list of genuinely-uploaded images (the slideshow; for
+// an NPC the first is the map token). Same path rule as token art.
+function assertCardImages(value, name) {
+  R.assert(Array.isArray(value), `${name} must be an array`);
+  R.assert(value.length <= 12, `${name}: too many images (12 max)`);
+  return value.map((p) => {
+    R.assert(typeof p === 'string' && /^\/assets\/tokens\/[\w.-]+$/.test(p),
+      `${name} entries must be uploaded image paths, got ${JSON.stringify(p)}`);
+    return p;
+  });
+}
+
+// Card sections: [{ title, images, entries: [{ label, text, visible, done, images }] }].
+// Free text throughout. visible drives whether an entry shows on the reveal;
+// done is GM-only progress tracking. images on a chapter/scene join the reveal
+// slideshow when that content is revealed (graphic-novel panels).
+function assertCardSections(value, name) {
+  R.assert(Array.isArray(value), `${name} must be an array`);
+  R.assert(value.length <= 40, `${name}: too many sections (40 max)`);
+  return value.map((s) => {
+    R.assert(s !== null && typeof s === 'object' && !Array.isArray(s), 'each section must be an object');
+    R.assert(Array.isArray(s.entries), 'section entries must be an array');
+    R.assert(s.entries.length <= 100, 'too many entries in a section (100 max)');
+    return {
+      title: R.assertString(s.title === undefined ? '' : s.title, 'section title').slice(0, 80),
+      images: assertCardImages(s.images === undefined ? [] : s.images, 'section images'),
+      // visible: chapter-level reveal gate, INDEPENDENT of each scene's visible
+      visible: s.visible === undefined ? true : !!s.visible,
+      // slides: whether this chapter's images are included in the reveal slideshow
+      slides: s.slides === undefined ? true : !!s.slides,
+      entries: s.entries.map((e) => {
+        R.assert(e !== null && typeof e === 'object' && !Array.isArray(e), 'each entry must be an object');
+        return {
+          label: R.assertString(e.label === undefined ? '' : e.label, 'entry label').slice(0, 80),
+          text: R.assertString(e.text === undefined ? '' : e.text, 'entry text').slice(0, 4000),
+          visible: e.visible === undefined ? true : !!e.visible,
+          done: e.done === undefined ? false : !!e.done,
+          images: assertCardImages(e.images === undefined ? [] : e.images, 'entry images'),
+          slides: e.slides === undefined ? true : !!e.slides,
+        };
+      }),
+    };
+  });
 }
 
 function activeMap() {
@@ -319,6 +474,7 @@ function findCondition(conditionId) {
 const ops = {
   'character.create'(p) {
     const system = R.assertOneOf(p.system, config.SYSTEMS, 'system');
+    const device_id = (typeof p.device_id === 'string' && p.device_id.length > 0) ? p.device_id : null;
     const base = {
       system,
       name: R.assertNonEmptyString(p.name, 'name'),
@@ -331,6 +487,7 @@ const ops = {
       encounters_done: 0,
       pending_points: 0,
       token_art: assertTokenArt(p.token_art === undefined ? '' : p.token_art, 'token_art'),
+      device_id,
     };
     let row;
     if (system === 'campfire') {
@@ -347,6 +504,7 @@ const ops = {
       ...row, id,
       dnd_sheet: system === 'dnd5e' ? JSON.parse(row.dnd_sheet) : null,
       drain: zeroDrain(), granted_blue: 0, conditions: [],
+      device_id,
     });
     persistRuntime();
     return { created_char_id: id };
@@ -370,7 +528,51 @@ const ops = {
         }
       }
     }
+    if (p.device_id !== undefined) {
+      const did = (typeof p.device_id === 'string' && p.device_id.length > 0) ? p.device_id : null;
+      c.device_id = did;
+      stmts.setCharacterDevice.run(did, c.id);
+    }
+    if (c.system === 'campfire') {
+      for (const attr of config.ATTRIBUTES) {
+        if (p[attr] !== undefined) {
+          R.assertIntIn(p[attr], 0, config.CEILING, attr);
+          c[attr] = p[attr];
+          if (c.drain[attr] > c[attr]) c.drain[attr] = c[attr];
+        }
+      }
+    }
     persistCharacter(c);
+  },
+
+  'character.set_device'(p) {
+    const c = getChar(p.char_id);
+    const did = p.device_id === null ? null : (typeof p.device_id === 'string' && p.device_id.length > 0 ? p.device_id : null);
+    c.device_id = did;
+    stmts.setCharacterDevice.run(did, c.id);
+  },
+
+  // Name a device. Used by the device itself ("Sara's phone") and by the GM
+  // to label a device that hasn't named itself.
+  'device.set_name'(p) {
+    const id = R.assertNonEmptyString(p.device_id, 'device_id');
+    const name = R.assertString(p.name === undefined ? '' : p.name, 'name').trim().slice(0, 60);
+    state.devices.set(id, { id, name });
+    stmts.setDeviceName.run(id, name);
+  },
+
+  // Forget a device. Any characters still linked to it are unlinked (not deleted)
+  // so they fall back to the "Unassigned" list instead of pointing at a ghost id.
+  'device.delete'(p) {
+    const id = R.assertNonEmptyString(p.device_id, 'device_id');
+    for (const c of state.characters.values()) {
+      if (c.device_id === id) {
+        c.device_id = null;
+        stmts.setCharacterDevice.run(null, c.id);
+      }
+    }
+    state.devices.delete(id);
+    stmts.deleteDevice.run(id);
   },
 
   // D&D 5e sheet edit: client sends the full new sheet; server validates whole-sheet.
@@ -515,10 +717,34 @@ const ops = {
 
   'initiative.add_custom'(p) {
     const label = R.assertNonEmptyString(p.label, 'label');
+    // optional portrait + footprint — lets NPC/token-derived entries carry their
+    // token image and size into the turn order (and onto the map when spawned)
+    const art = assertTokenArt(p.art === undefined || p.art === null ? '' : p.art, 'art');
+    const w = p.w === undefined ? 1 : R.assertIntIn(p.w, 1, config.TOKEN_MAX_SIZE, 'w');
+    const h = p.h === undefined ? 1 : R.assertIntIn(p.h, 1, config.TOKEN_MAX_SIZE, 'h');
+    const shape = p.shape === undefined ? 'circle' : R.assertOneOf(p.shape, config.TOKEN_SHAPES, 'shape');
     const id = `custom:${customEntrySeq++}`;
-    state.initiative.entries.push({ id, char_id: null, label, visibility: 'visible' });
+    state.initiative.entries.push({ id, char_id: null, label, visibility: 'visible', art, w, h, shape });
     persistRuntime();
     return { created_entry_id: id };
+  },
+
+  // Change (or clear) a custom entry's portrait after the fact.
+  'initiative.set_art'(p) {
+    const entry = state.initiative.entries.find((e) => e.id === p.entry_id && e.char_id === null);
+    R.assert(entry, `no custom initiative entry '${p.entry_id}'`);
+    entry.art = assertTokenArt(p.art === undefined || p.art === null ? '' : p.art, 'art');
+    persistRuntime();
+  },
+
+  // Rename a custom entry — lets the GM tell apart multiple copies of the same
+  // monster ("Ogre King A", "Ogre King B"). Character entries take their name
+  // from the character, so only custom entries are renameable.
+  'initiative.set_label'(p) {
+    const entry = state.initiative.entries.find((e) => e.id === p.entry_id && e.char_id === null);
+    R.assert(entry, `no custom initiative entry '${p.entry_id}'`);
+    entry.label = R.assertNonEmptyString(p.label, 'label');
+    persistRuntime();
   },
 
   // Hide an entry from the projector + players (a GM-only reminder, an
@@ -663,6 +889,7 @@ const ops = {
     if (state.game.active_map_id === map.id) {
       const dims = gridDims(map);
       for (const t of state.tokens.values()) {
+        if (t.map_id !== map.id) continue; // only this map's tokens live on this grid
         // shrink footprints that no longer fit, then pull positions onto the grid
         const w = Math.min(t.w, dims.cols);
         const h = Math.min(t.h, dims.rows);
@@ -762,8 +989,9 @@ const ops = {
     R.assertInt(p.map_id, 'map_id');
     R.assert(state.maps.has(p.map_id), `no map with id ${p.map_id}`);
     if (state.game.active_map_id === p.map_id) ops['map.set_active']({ map_id: null });
-    stmts.deleteMap.run(p.map_id);
+    stmts.deleteMap.run(p.map_id); // ON DELETE CASCADE clears the map's tokens in the DB
     state.maps.delete(p.map_id);
+    for (const [id, t] of state.tokens) if (t.map_id === p.map_id) state.tokens.delete(id); // and from memory
     state.camera_bookmarks = state.camera_bookmarks.filter((b) => b.map_id !== p.map_id);
     persistRuntime();
   },
@@ -772,6 +1000,7 @@ const ops = {
     const map = activeMap();
     const kind = R.assertOneOf(p.kind, config.TOKEN_KINDS, 'kind');
     const row = {
+      map_id: map.id, // tokens belong to the map they were placed on
       label: R.assertNonEmptyString(p.label, 'label'),
       kind,
       char_id: null,
@@ -787,8 +1016,8 @@ const ops = {
     assertFootprintOnGrid(row.col, row.row, row.w, row.h, map);
     if (kind === 'pc') {
       const c = getChar(p.char_id);
-      R.assert(![...state.tokens.values()].some((t) => t.char_id === c.id),
-        `${c.name} already has a token on the map`);
+      R.assert(![...state.tokens.values()].some((t) => t.char_id === c.id && t.map_id === map.id),
+        `${c.name} already has a token on this map`);
       row.char_id = c.id;
       if (c.token_art !== '') row.art = c.token_art; // the portrait follows the character
     }
@@ -926,14 +1155,268 @@ const ops = {
     state.custom_colors = state.custom_colors.filter((c) => c !== color);
     persistRuntime();
   },
+
+  // --- Reveal cards: NPCs, locations, and story beats (one mechanism) --------
+
+  'card.create'(p) {
+    const kind = R.assertOneOf(p.kind, config.CARD_KINDS, 'kind');
+    const name = R.assertNonEmptyString(p.name, 'name');
+    const row = {
+      kind, name, subtitle: '', notes: '', images: '[]', sections: '[]',
+      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: 0, images_slides: 1, show_link: 1,
+    };
+    const info = stmts.insertCard.run(row);
+    const id = Number(info.lastInsertRowid);
+    state.cards.set(id, {
+      id, kind, name, subtitle: '', notes: '', images: [], sections: [],
+      token_w: 1, token_h: 1, token_shape: 'circle', bg_image: '', bg_effect: 'embers', visited: false, images_slides: true, show_link: true,
+    });
+    return { created_card_id: id };
+  },
+
+  // Partial update — only the fields present are touched. images/sections are
+  // replaced wholesale and validated (same shape the GM edits client-side).
+  'card.update'(p) {
+    const c = getCard(p.card_id);
+    if (p.name !== undefined) c.name = R.assertNonEmptyString(p.name, 'name');
+    if (p.subtitle !== undefined) c.subtitle = R.assertString(p.subtitle, 'subtitle').slice(0, 120);
+    if (p.notes !== undefined) c.notes = R.assertString(p.notes, 'notes').slice(0, 8000);
+    if (p.images !== undefined) c.images = assertCardImages(p.images, 'images');
+    if (p.sections !== undefined) c.sections = assertCardSections(p.sections, 'sections');
+    if (p.token_w !== undefined) c.token_w = R.assertIntIn(p.token_w, 1, config.TOKEN_MAX_SIZE, 'token_w');
+    if (p.token_h !== undefined) c.token_h = R.assertIntIn(p.token_h, 1, config.TOKEN_MAX_SIZE, 'token_h');
+    if (p.token_shape !== undefined) c.token_shape = R.assertOneOf(p.token_shape, config.TOKEN_SHAPES, 'token_shape');
+    if (p.bg_image !== undefined) c.bg_image = assertTokenArt(p.bg_image === null ? '' : p.bg_image, 'bg_image');
+    if (p.bg_effect !== undefined) c.bg_effect = R.assertOneOf(p.bg_effect, config.NPC_EFFECTS, 'bg_effect');
+    if (p.visited !== undefined) { R.assert(typeof p.visited === 'boolean', 'visited must be a boolean'); c.visited = p.visited; }
+    if (p.images_slides !== undefined) { R.assert(typeof p.images_slides === 'boolean', 'images_slides must be a boolean'); c.images_slides = p.images_slides; }
+    persistCard(c);
+  },
+
+  // GM holds a specific image of the revealed card on the projector (driven from
+  // their viewer's carousel); null releases back to the auto slideshow.
+  'card.set_reveal_image'(p) {
+    if (p.index === null || p.index === undefined) {
+      state.reveal_image_index = null;
+    } else {
+      state.reveal_image_index = R.assertIntIn(p.index, 0, 1000, 'index');
+    }
+  },
+
+  // Live toggle of a single entry's visibility — the GM flips these on/off as a
+  // scene unfolds, and the reveal screen updates instantly.
+  'card.set_entry_visibility'(p) {
+    const c = getCard(p.card_id);
+    const si = R.assertInt(p.section, 'section');
+    const ei = R.assertInt(p.entry, 'entry');
+    R.assert(c.sections[si], `no section ${si} on card ${c.id}`);
+    R.assert(c.sections[si].entries[ei], `no entry ${ei} in section ${si}`);
+    R.assert(typeof p.visible === 'boolean', 'visible must be a boolean');
+    c.sections[si].entries[ei].visible = p.visible;
+    persistCard(c);
+  },
+
+  // GM-only progress tracking: mark an entry (e.g. a story scene) done/not done.
+  'card.set_entry_done'(p) {
+    const c = getCard(p.card_id);
+    const si = R.assertInt(p.section, 'section');
+    const ei = R.assertInt(p.entry, 'entry');
+    R.assert(c.sections[si], `no section ${si} on card ${c.id}`);
+    R.assert(c.sections[si].entries[ei], `no entry ${ei} in section ${si}`);
+    R.assert(typeof p.done === 'boolean', 'done must be a boolean');
+    c.sections[si].entries[ei].done = p.done;
+    persistCard(c);
+  },
+
+  // Whether a scene's / chapter's images ride in the reveal slideshow — separate
+  // from whether its text is shown, so a done scene can stay visible but drop its
+  // panels out of the mix.
+  'card.set_entry_slides'(p) {
+    const c = getCard(p.card_id);
+    const si = R.assertInt(p.section, 'section');
+    const ei = R.assertInt(p.entry, 'entry');
+    R.assert(c.sections[si] && c.sections[si].entries[ei], `no entry ${ei} in section ${si}`);
+    R.assert(typeof p.slides === 'boolean', 'slides must be a boolean');
+    c.sections[si].entries[ei].slides = p.slides;
+    persistCard(c);
+  },
+
+  'card.set_section_slides'(p) {
+    const c = getCard(p.card_id);
+    const si = R.assertInt(p.section, 'section');
+    R.assert(c.sections[si], `no section ${si} on card ${c.id}`);
+    R.assert(typeof p.slides === 'boolean', 'slides must be a boolean');
+    c.sections[si].slides = p.slides;
+    persistCard(c);
+  },
+
+  // Reveal/hide a whole chapter via its OWN visibility gate — independent of the
+  // individual scene show/hides (those are preserved).
+  'card.set_section_visible'(p) {
+    const c = getCard(p.card_id);
+    const si = R.assertInt(p.section, 'section');
+    R.assert(c.sections[si], `no section ${si} on card ${c.id}`);
+    R.assert(typeof p.visible === 'boolean', 'visible must be a boolean');
+    c.sections[si].visible = p.visible;
+    persistCard(c);
+  },
+
+  'card.delete'(p) {
+    const c = getCard(p.card_id);
+    stmts.deleteCard.run(c.id);
+    state.cards.delete(c.id);
+    if (state.game.revealed_card_id === c.id) {
+      state.game.revealed_card_id = null;
+      state.reveal_image_index = null;
+      stmts.updateGame.run(state.game);
+    }
+  },
+
+  // Show this card full-screen on the projector + players (null to dismiss).
+  // Like map.set_active, it's a single piece of presentation state.
+  'card.reveal'(p) {
+    if (p.card_id === null || p.card_id === undefined) {
+      state.game.revealed_card_id = null;
+    } else {
+      state.game.revealed_card_id = getCard(p.card_id).id;
+    }
+    state.reveal_image_index = null; // a new reveal starts on the auto slideshow
+    state.reveal_scroll_paused = false; // ...and with the text crawl running
+    state.reveal_focus = null; // ...and with nothing spotlighted
+    stmts.updateGame.run(state.game);
+  },
+
+  // GM toggles a card's connector line on/off — a per-card preference (some
+  // cards it helps, others it's noise), persisted so it survives restarts.
+  'card.set_show_link'(p) {
+    const c = getCard(p.card_id);
+    c.show_link = !!p.on;
+    persistCard(c);
+  },
+
+  // GM pauses/resumes the projector's slow text crawl so the table can dwell.
+  'card.set_scroll_paused'(p) {
+    state.reveal_scroll_paused = !!p.paused;
+  },
+
+  // GM spotlights a public section (entry null) or one entry on the projector
+  // (scroll-to + lift over the dimmed rest); section null clears it. Indices are
+  // into the revealed card's VISIBLE sections/entries.
+  'card.set_focus'(p) {
+    if (!p || p.section === null || p.section === undefined) {
+      state.reveal_focus = null;
+      return;
+    }
+    const section = R.assertIntIn(p.section, 0, 1000, 'section');
+    const entry = (p.entry === null || p.entry === undefined)
+      ? null : R.assertIntIn(p.entry, 0, 1000, 'entry');
+    state.reveal_focus = { section, entry };
+  },
+
+  // GM global UX settings (persisted). Only the keys present are touched.
+  'settings.update'(p) {
+    if (p.transition_images !== undefined) {
+      R.assert(p.transition_images && typeof p.transition_images === 'object', 'transition_images must be an object');
+      for (const kind of ['npc', 'location', 'story']) {
+        const v = p.transition_images[kind];
+        if (v !== undefined) {
+          state.settings.transition_images[kind] = assertTokenArt(v === null ? '' : v, `transition_images.${kind}`);
+        }
+      }
+    }
+    if (p.transitions_enabled !== undefined) {
+      R.assert(typeof p.transitions_enabled === 'boolean', 'transitions_enabled must be a boolean');
+      state.settings.transitions_enabled = p.transitions_enabled;
+    }
+    if (p.transition_ms !== undefined) {
+      state.settings.transition_ms = R.assertIntIn(p.transition_ms, 200, 3000, 'transition_ms');
+    }
+    if (p.scroll_speed !== undefined) {
+      R.assert(typeof p.scroll_speed === 'number' && p.scroll_speed >= 0.3 && p.scroll_speed <= 3, 'scroll_speed must be 0.3–3');
+      state.settings.scroll_speed = p.scroll_speed;
+    }
+    if (p.particles_enabled !== undefined) {
+      R.assert(typeof p.particles_enabled === 'boolean', 'particles_enabled must be a boolean');
+      state.settings.particles_enabled = p.particles_enabled;
+    }
+    persistRuntime();
+  },
 };
+
+// Clamp the GM's focus to the composed public sections — a section/entry that
+// was hidden or removed since it was set clears the focus rather than dangling.
+function publicFocus(publicSections) {
+  const f = state.reveal_focus;
+  if (!f || typeof f.section !== 'number' || f.section >= publicSections.length) return null;
+  if (f.entry === null || f.entry === undefined) return { section: f.section, entry: null };
+  const sec = publicSections[f.section];
+  if (!sec || f.entry >= sec.entries.length) return null;
+  return { section: f.section, entry: f.entry };
+}
+
+// Player/projector view of the revealed card: visible entries only, no GM notes
+// or done flags. Sections with nothing visible are dropped so no empty headers
+// reach the wall.
+function publicRevealedCard() {
+  if (state.game.revealed_card_id === null) return null;
+  const c = state.cards.get(state.game.revealed_card_id);
+  if (!c) return null;
+  // Compose the slideshow AND the public sections together, so each image can
+  // carry the index of the (public) chapter/scene that supplied it — the reveal
+  // draws a connector line from that text to the image frame. e:-1 = chapter
+  // image, e>=0 = scene image, source null = the card's own images.
+  const publicSections = [];
+  const images = [];
+  const imageSources = [];
+  // the card's own images (the "arc" gallery) — gated by images_slides, sourced
+  // to the card name so the reveal can draw the connector from the title
+  if (c.images_slides !== false) {
+    for (const img of c.images) { images.push(img); imageSources.push({ card: true }); }
+  }
+  for (const s of c.sections) {
+    if (s.visible === false) continue; // chapter hidden → nothing from it
+    const visEntries = s.entries.filter((e) => e.visible);
+    if (visEntries.length === 0) continue;
+    const psIdx = publicSections.length;
+    publicSections.push({ title: s.title, entries: visEntries.map((e) => ({ label: e.label, text: e.text })) });
+    if (s.slides !== false && Array.isArray(s.images)) {
+      for (const img of s.images) { images.push(img); imageSources.push({ s: psIdx, e: -1 }); }
+    }
+    visEntries.forEach((e, peIdx) => {
+      if (e.slides !== false && Array.isArray(e.images)) {
+        for (const img of e.images) { images.push(img); imageSources.push({ s: psIdx, e: peIdx }); }
+      }
+    });
+  }
+  return {
+    id: c.id,
+    kind: c.kind,
+    name: c.name,
+    subtitle: c.subtitle,
+    images,
+    image_sources: imageSources,
+    bg_image: c.bg_image,
+    bg_effect: c.bg_effect,
+    // GM-held image index (clamped to the composed list), else null = slideshow
+    image_index: (typeof state.reveal_image_index === 'number' && state.reveal_image_index < images.length)
+      ? state.reveal_image_index : null,
+    show_link: c.show_link !== false,
+    scroll_paused: !!state.reveal_scroll_paused,
+    // global feel knobs the reveal honors (auto-scroll speed, particle on/off)
+    scroll_speed: state.settings.scroll_speed || 1,
+    particles_enabled: state.settings.particles_enabled !== false,
+    // clamp to a real section/entry; a stale focus (content changed underneath) clears
+    focus: publicFocus(publicSections),
+    sections: publicSections,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Role-scoped snapshots (handoff §5). Scoping is enforced HERE, server-side —
 // secrets never leave the process for the wrong role.
 // ---------------------------------------------------------------------------
 
-function publicCharacter(c, { includeHiddenDesire, includeSecretConditions }) {
+function publicCharacter(c, { includeHiddenDesire, includeSecretConditions, includeDeviceId }) {
   const out = {
     id: c.id, system: c.system, name: c.name, concept: c.concept,
     flavor: c.flavor, gear: c.gear, notes: c.notes, token_art: c.token_art,
@@ -957,22 +1440,43 @@ function publicCharacter(c, { includeHiddenDesire, includeSecretConditions }) {
     out.dnd_sheet = JSON.parse(JSON.stringify(c.dnd_sheet));
   }
   if (includeHiddenDesire) out.hidden_desire = c.hidden_desire;
+  if (includeDeviceId) out.device_id = c.device_id || null;
   return out;
 }
 
-function snapshotFor(role, charId) {
+function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
   R.assertOneOf(role, ['player', 'dm', 'display'], 'role');
   const chars = [...state.characters.values()];
   const clocks = [...state.clocks.values()];
   const activeMapRow = state.game.active_map_id === null ? null : { ...state.maps.get(state.game.active_map_id) };
   // Tokens lurking entirely in the fog are dropped for players and the projector
   // (decision: hide ALL tokens in fog, PCs included). The GM keeps the full set.
-  const allTokens = [...state.tokens.values()];
+  // Tokens are scoped to their map — only the active map's tokens are ever sent.
+  const allTokens = activeMapRow === null
+    ? []
+    : [...state.tokens.values()].filter((t) => t.map_id === activeMapRow.id);
   const roleTokens = (role === 'dm' || activeMapRow === null || !activeMapRow.fog_enabled)
     ? allTokens
     : allTokens.filter((t) => !tokenConcealed(activeMapRow, t));
   const base = {
     game: { reward_every_n_encounters: state.game.reward_every_n_encounters, active_map_id: state.game.active_map_id },
+    // global UX settings (transition splash, etc.) — every role gets them so the
+    // projector can act on them and the GM can edit them.
+    settings: {
+      transition_images: {
+        npc: state.settings.transition_images.npc || '',
+        location: state.settings.transition_images.location || '',
+        story: state.settings.transition_images.story || '',
+      },
+      transitions_enabled: state.settings.transitions_enabled !== false,
+      transition_ms: state.settings.transition_ms || 520,
+      scroll_speed: state.settings.scroll_speed || 1,
+      particles_enabled: state.settings.particles_enabled !== false,
+    },
+    // reveal display prefs the GM drives from their preview (connector line is now
+    // per-card on card.show_link; these two are transient runtime state).
+    reveal_scroll_paused: !!state.reveal_scroll_paused,
+    reveal_focus: state.reveal_focus ? { section: state.reveal_focus.section, entry: state.reveal_focus.entry } : null,
     initiative: {
       // dm_only entries (GM reminders, hidden threats) never reach players or
       // the projector — filtered server-side like dm_only clocks. Entry
@@ -1003,13 +1507,15 @@ function snapshotFor(role, charId) {
       TOKEN_SHAPES: config.TOKEN_SHAPES,
       TOKEN_DEFAULT_SHAPES: config.TOKEN_DEFAULT_SHAPES,
       MAP_ROTATIONS: config.MAP_ROTATIONS,
+      NPC_EFFECTS: config.NPC_EFFECTS,
+      CARD_KINDS: config.CARD_KINDS,
       DND: config.DND,
     },
   };
   if (role === 'dm') {
     return {
       ...base,
-      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true, includeSecretConditions: true })),
+      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: true, includeSecretConditions: true, includeDeviceId: true })),
       clocks: clocks.map((c) => ({ ...c })),
       maps: [...state.maps.values()].map((m) => ({ ...m })),
       // only the active map's saved views — a view is meaningless elsewhere
@@ -1018,13 +1524,29 @@ function snapshotFor(role, charId) {
         .map((b) => ({ ...b })),
       custom_colors: [...state.custom_colors],
       used_conditions: [...state.used_conditions],
+      // full card library (GM-only — includes private notes, hidden + done flags)
+      cards: JSON.parse(JSON.stringify([...state.cards.values()])),
+      revealed_card_id: state.game.revealed_card_id,
+      revealed_card: publicRevealedCard(),
+      connected_device_ids: connectedDeviceIds,
+      // Every known device (named or not) plus any connected ones, with names + online flag.
+      devices: [...new Set([...state.devices.keys(), ...connectedDeviceIds])].map((id) => ({
+        id,
+        name: (state.devices.get(id) || {}).name || '',
+        online: connectedDeviceIds.includes(id),
+      })),
     };
   }
   if (role === 'player') {
+    const playerChars = deviceId
+      ? chars.filter((c) => c.device_id === deviceId)
+      : [];
     return {
       ...base,
-      characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
+      characters: playerChars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
       clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+      device_name: deviceId ? ((state.devices.get(deviceId) || {}).name || '') : '',
+      revealed_card: publicRevealedCard(),
     };
   }
   // display: roster + visible clocks only; never hidden desires, never dm_only clocks.
@@ -1032,7 +1554,8 @@ function snapshotFor(role, charId) {
     ...base,
     characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false, includeSecretConditions: false })),
     clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+    revealed_card: publicRevealedCard(),
   };
 }
 
-module.exports = { state, load, ops, snapshotFor };
+module.exports = { state, load, ops, snapshotFor, registerDevice };

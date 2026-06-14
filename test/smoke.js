@@ -64,10 +64,14 @@ function defaultSkills() {
 }
 
 let heroId, wizardId;
+// Both test heroes live on one phone: the player snapshot scopes characters by
+// device_id, so a player view only resolves with the owning device passed in.
+const DEV = 'dev-test-phone';
 check('character.create (campfire)', () => {
   heroId = ops['character.create']({
     system: 'campfire', name: 'Tharn', concept: 'storm-priest',
     brawn: 2, constitution: 1, magic: 1, wits: 0, hidden_desire: 'wants the crown',
+    device_id: DEV,
   }).created_char_id;
   assert.ok(Number.isInteger(heroId));
   throws(() => ops['character.create']({ system: 'campfire', name: 'Bad', concept: 'x', brawn: 3, constitution: 1, magic: 0, wits: 0 }));
@@ -77,6 +81,7 @@ check('character.create (campfire)', () => {
 check('character.create (dnd5e)', () => {
   wizardId = ops['character.create']({
     system: 'dnd5e', name: 'Mira', concept: 'tired wizard',
+    device_id: DEV,
     sheet: {
       class_name: 'Wizard', race: 'Elf', level: 3,
       abilities: { str: 8, dex: 14, con: 12, int: 17, wis: 12, cha: 10 },
@@ -187,13 +192,13 @@ check('conditions: freeform names, edit, visibility, both subject kinds', () => 
   ops['condition.add']({ char_id: heroId, kind: 'secretly cursed', visibility: 'dm_only' });
   const dmHero = snapshotFor('dm', null).characters.find((c) => c.id === heroId);
   assert.ok(dmHero.conditions.some((x) => x.kind === 'secretly cursed'));
-  const ownHero = snapshotFor('player', heroId).characters.find((c) => c.id === heroId);
+  const ownHero = snapshotFor('player', heroId, DEV).characters.find((c) => c.id === heroId);
   assert.ok(!ownHero.conditions.some((x) => x.kind === 'secretly cursed'), 'player saw a GM-only note!');
 
   // edit: rename + flip visibility
   const cursed = state.characters.get(heroId).conditions.find((x) => x.kind === 'secretly cursed');
   ops['condition.update']({ condition_id: cursed.id, kind: 'visibly cursed', visibility: 'visible' });
-  assert.ok(snapshotFor('player', heroId).characters.find((c) => c.id === heroId)
+  assert.ok(snapshotFor('player', heroId, DEV).characters.find((c) => c.id === heroId)
     .conditions.some((x) => x.kind === 'visibly cursed'));
 
   // conditions on a custom initiative entry; removed with the entry
@@ -254,12 +259,12 @@ check('role scoping: hidden desires + dm_only clocks never leak', () => {
   assert.ok(dm.characters.find((c) => c.id === heroId).hidden_desire === 'wants the crown');
   assert.ok(dm.clocks.some((c) => c.id === secretId));
 
-  const otherPlayer = snapshotFor('player', wizardId);
+  const otherPlayer = snapshotFor('player', wizardId, DEV);
   const heroSeen = otherPlayer.characters.find((c) => c.id === heroId);
   assert.strictEqual(heroSeen.hidden_desire, undefined, 'another player saw a hidden desire!');
   assert.ok(!otherPlayer.clocks.some((c) => c.id === secretId), 'a player saw a dm_only clock!');
 
-  const ownPlayer = snapshotFor('player', heroId);
+  const ownPlayer = snapshotFor('player', heroId, DEV);
   assert.strictEqual(ownPlayer.characters.find((c) => c.id === heroId).hidden_desire, 'wants the crown');
 
   const display = snapshotFor('display', null);
@@ -275,7 +280,7 @@ check('reward rate live-tunable', () => {
 
 check('reveal: dm_only clock flips visible in one op', () => {
   ops['clock.set_visibility']({ clock_id: secretId, visibility: 'visible' });
-  assert.ok(snapshotFor('player', heroId).clocks.some((c) => c.id === secretId));
+  assert.ok(snapshotFor('player', heroId, DEV).clocks.some((c) => c.id === secretId));
 });
 
 let mapId;
@@ -410,7 +415,7 @@ check('initiative visibility: dm_only entries never reach players/display', () =
   ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'dm_only' });
   assert.ok(snapshotFor('dm', null).initiative.entries.some((e) => e.id === reminder));
   assert.ok(!snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder), 'projector saw a GM-only entry!');
-  assert.ok(!snapshotFor('player', heroId).initiative.entries.some((e) => e.id === reminder), 'a player saw a GM-only entry!');
+  assert.ok(!snapshotFor('player', heroId, DEV).initiative.entries.some((e) => e.id === reminder), 'a player saw a GM-only entry!');
   ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'visible' });
   assert.ok(snapshotFor('display', null).initiative.entries.some((e) => e.id === reminder));
   throws(() => ops['initiative.set_visibility']({ entry_id: reminder, visibility: 'sneaky' }));
@@ -532,6 +537,200 @@ check('character.delete cleans initiative + pc tokens', () => {
   ops['character.delete']({ char_id: wizardId });
   assert.ok(!state.initiative.entries.some((e) => e.char_id === wizardId));
   assert.ok(![...state.tokens.values()].some((t) => t.char_id === wizardId));
+});
+
+// --- devices ---------------------------------------------------------------
+check('devices: register, name, online flag, GM listing', () => {
+  const { snapshotFor } = require('../state');
+  // a device the GM names shows up in the GM's device list…
+  ops['device.set_name']({ device_id: 'dev-phone-2', name: "  Mara's phone  " });
+  const dm = snapshotFor('dm', null, null, ['dev-phone-2']);
+  const d2 = dm.devices.find((d) => d.id === 'dev-phone-2');
+  assert.ok(d2, 'GM did not see the named device');
+  assert.strictEqual(d2.name, "Mara's phone", 'device name not trimmed');
+  // …flagged online only while it is in the connected set
+  assert.strictEqual(d2.online, true, 'connected device not marked online');
+  assert.strictEqual(snapshotFor('dm', null, null, []).devices.find((d) => d.id === 'dev-phone-2').online,
+    false, 'a disconnected device was still marked online');
+  // a connected-but-unknown device still appears (so the GM can name it)
+  assert.ok(snapshotFor('dm', null, null, ['ghost-device']).devices.some((d) => d.id === 'ghost-device'));
+  throws(() => ops['device.set_name']({ device_id: '', name: 'x' })); // blank id rejected
+});
+
+check('device scoping: a phone sees only its own characters; forget unlinks', () => {
+  const { snapshotFor } = require('../state');
+  // hero starts on DEV; reassign it to dev-phone-2
+  ops['character.set_device']({ char_id: heroId, device_id: 'dev-phone-2' });
+  assert.ok(snapshotFor('player', heroId, 'dev-phone-2').characters.some((c) => c.id === heroId));
+  assert.ok(!snapshotFor('player', heroId, DEV).characters.some((c) => c.id === heroId),
+    'a character leaked onto the wrong phone');
+  // forgetting a device unlinks its characters (never deletes them) and drops it
+  // from the GM list
+  ops['device.delete']({ device_id: 'dev-phone-2' });
+  assert.strictEqual(state.characters.get(heroId).device_id, null);
+  assert.ok(!snapshotFor('dm', null).devices.some((d) => d.id === 'dev-phone-2'),
+    'a forgotten device was still listed');
+  // an unassigned character reaches no player phone at all
+  assert.ok(!snapshotFor('player', heroId, 'any-device').characters.some((c) => c.id === heroId));
+  // unlinking to null is also allowed directly
+  ops['character.set_device']({ char_id: heroId, device_id: null });
+  assert.strictEqual(state.characters.get(heroId).device_id, null);
+});
+
+// --- reveal cards (NPCs / locations / story beats) -------------------------
+let cardId;
+check('reveal cards: create, kind + name + field validation', () => {
+  cardId = ops['card.create']({ kind: 'npc', name: 'Grukk the Ogre' }).created_card_id;
+  assert.ok(Number.isInteger(cardId));
+  assert.strictEqual(state.cards.get(cardId).bg_effect, 'embers'); // sensible default
+  throws(() => ops['card.create']({ kind: 'villain', name: 'x' })); // unknown kind
+  throws(() => ops['card.create']({ kind: 'npc', name: '  ' }));    // blank name
+  ops['card.update']({ card_id: cardId, subtitle: 'CR 2 brute', notes: 'secretly fears fire', bg_effect: 'arcane' });
+  const c = state.cards.get(cardId);
+  assert.strictEqual(c.subtitle, 'CR 2 brute');
+  assert.strictEqual(c.bg_effect, 'arcane');
+  throws(() => ops['card.update']({ card_id: cardId, bg_effect: 'lasers' }));           // not a known effect
+  throws(() => ops['card.update']({ card_id: cardId, images: ['http://evil/x.png'] }));  // must be an uploaded path
+  throws(() => ops['card.update']({ card_id: cardId, name: '  ' }));                     // can't blank the name
+});
+
+check('reveal cards: GM notes + hidden entries never reach the wall', () => {
+  const { snapshotFor } = require('../state');
+  ops['card.update']({ card_id: cardId, sections: [
+    { title: 'Lore', entries: [
+      { label: 'Origin', text: 'born in the marsh', visible: true },
+      { label: 'Secret', text: 'fears the king', visible: false },
+    ] },
+    { title: 'Tactics', visible: false, entries: [
+      { label: 'Opener', text: 'charges the loudest voice', visible: true },
+    ] },
+  ] });
+  ops['card.reveal']({ card_id: cardId });
+  const shown = snapshotFor('display', null).revealed_card;
+  assert.strictEqual(shown.id, cardId);
+  // only the visible entry of the visible chapter reaches the projector
+  assert.deepStrictEqual(shown.sections.map((s) => s.title), ['Lore']);
+  assert.deepStrictEqual(shown.sections[0].entries.map((e) => e.label), ['Origin']);
+  // GM-only fields are stripped from the public view
+  assert.ok(!('done' in shown.sections[0].entries[0]), 'a done flag leaked to the wall');
+  assert.ok(!('notes' in shown), 'GM notes leaked to the wall');
+  // the players' copy is scoped identically
+  const playerSeen = snapshotFor('player', heroId, DEV).revealed_card;
+  assert.deepStrictEqual(playerSeen.sections[0].entries.map((e) => e.label), ['Origin']);
+  // the GM still sees the whole card (private notes + hidden entries) in their library
+  const lib = snapshotFor('dm', null).cards.find((c) => c.id === cardId);
+  assert.strictEqual(lib.notes, 'secretly fears fire');
+  assert.strictEqual(lib.sections[1].entries.length, 1);
+});
+
+check('reveal cards: live toggles flip what the wall shows', () => {
+  const { snapshotFor } = require('../state');
+  ops['card.set_entry_visibility']({ card_id: cardId, section: 0, entry: 1, visible: true }); // reveal the secret
+  assert.deepStrictEqual(snapshotFor('display', null).revealed_card.sections[0].entries.map((e) => e.label),
+    ['Origin', 'Secret']);
+  ops['card.set_section_visible']({ card_id: cardId, section: 1, visible: true }); // reveal the hidden chapter
+  assert.deepStrictEqual(snapshotFor('display', null).revealed_card.sections.map((s) => s.title),
+    ['Lore', 'Tactics']);
+  // out-of-range indices and non-boolean flags fail loud
+  throws(() => ops['card.set_entry_visibility']({ card_id: cardId, section: 9, entry: 0, visible: true }));
+  throws(() => ops['card.set_entry_visibility']({ card_id: cardId, section: 0, entry: 9, visible: true }));
+  throws(() => ops['card.set_entry_visibility']({ card_id: cardId, section: 0, entry: 0, visible: 'yes' }));
+});
+
+check('reveal cards: focus / pause / held image are transient and reset per reveal', () => {
+  const { snapshotFor } = require('../state');
+  ops['card.set_scroll_paused']({ paused: true });
+  ops['card.set_focus']({ section: 0, entry: 1 });
+  let shown = snapshotFor('display', null).revealed_card;
+  assert.strictEqual(shown.scroll_paused, true);
+  assert.deepStrictEqual(shown.focus, { section: 0, entry: 1 });
+  // a focus past the end of the composed sections clears instead of dangling
+  ops['card.set_focus']({ section: 0, entry: 99 });
+  assert.strictEqual(snapshotFor('display', null).revealed_card.focus, null);
+  // re-revealing the same card resets the transient presentation state
+  ops['card.reveal']({ card_id: cardId });
+  shown = snapshotFor('display', null).revealed_card;
+  assert.strictEqual(shown.scroll_paused, false);
+  assert.strictEqual(shown.focus, null);
+});
+
+check('reveal cards: slideshow gates compose card + chapter + scene images', () => {
+  const { snapshotFor } = require('../state');
+  ops['card.update']({ card_id: cardId,
+    images: ['/assets/tokens/arc.png'], // the card's own gallery
+    sections: [
+      { title: 'Lore', images: ['/assets/tokens/chapter.png'], entries: [
+        { label: 'Origin', text: 'born in the marsh', visible: true, images: ['/assets/tokens/scene.png'] },
+      ] },
+    ] });
+  ops['card.reveal']({ card_id: cardId });
+  // all three sources ride the slideshow, each tagged with where it came from
+  let shown = snapshotFor('display', null).revealed_card;
+  assert.deepStrictEqual(shown.images, ['/assets/tokens/arc.png', '/assets/tokens/chapter.png', '/assets/tokens/scene.png']);
+  assert.deepStrictEqual(shown.image_sources, [{ card: true }, { s: 0, e: -1 }, { s: 0, e: 0 }]);
+  // drop the card's own gallery out of the mix
+  ops['card.update']({ card_id: cardId, images_slides: false });
+  assert.deepStrictEqual(snapshotFor('display', null).revealed_card.images,
+    ['/assets/tokens/chapter.png', '/assets/tokens/scene.png']);
+  // …then the chapter's panels…
+  ops['card.set_section_slides']({ card_id: cardId, section: 0, slides: false });
+  assert.deepStrictEqual(snapshotFor('display', null).revealed_card.images, ['/assets/tokens/scene.png']);
+  // …then the scene's panel — leaving an empty slideshow
+  ops['card.set_entry_slides']({ card_id: cardId, section: 0, entry: 0, slides: false });
+  assert.deepStrictEqual(snapshotFor('display', null).revealed_card.images, []);
+  // the connector-line preference is per-card and rides the public view
+  ops['card.set_show_link']({ card_id: cardId, on: false });
+  assert.strictEqual(snapshotFor('display', null).revealed_card.show_link, false);
+});
+
+check('reveal cards: dismiss + deleting the revealed card clears the wall', () => {
+  const { snapshotFor } = require('../state');
+  ops['card.reveal']({ card_id: null });
+  assert.strictEqual(snapshotFor('display', null).revealed_card, null);
+  // re-reveal, then delete it out from under the projector
+  ops['card.reveal']({ card_id: cardId });
+  assert.strictEqual(state.game.revealed_card_id, cardId);
+  ops['card.delete']({ card_id: cardId });
+  assert.strictEqual(state.game.revealed_card_id, null);
+  assert.strictEqual(snapshotFor('display', null).revealed_card, null);
+  assert.ok(!state.cards.has(cardId));
+});
+
+// --- projector settings ----------------------------------------------------
+check('settings: scroll speed / particles / transitions validated + broadcast', () => {
+  const { snapshotFor } = require('../state');
+  ops['settings.update']({ scroll_speed: 2, particles_enabled: false, transitions_enabled: true, transition_ms: 800 });
+  const s = snapshotFor('display', null).settings; // every role gets settings
+  assert.strictEqual(s.scroll_speed, 2);
+  assert.strictEqual(s.particles_enabled, false);
+  assert.strictEqual(s.transition_ms, 800);
+  // per-kind transition splash images must be uploaded paths
+  ops['settings.update']({ transition_images: { npc: '/assets/tokens/splash.png' } });
+  assert.strictEqual(snapshotFor('dm', null).settings.transition_images.npc, '/assets/tokens/splash.png');
+  throws(() => ops['settings.update']({ scroll_speed: 9 }));                            // outside 0.3–3
+  throws(() => ops['settings.update']({ transition_ms: 50 }));                          // below 200
+  throws(() => ops['settings.update']({ transition_images: { npc: 'http://x/y.png' } }));
+  throws(() => ops['settings.update']({ particles_enabled: 'no' }));
+});
+
+// --- multi-map token scoping ----------------------------------------------
+check('tokens are scoped to their map; switching maps swaps the token set', () => {
+  const { snapshotFor } = require('../state');
+  const mapA = ops['map.calibrate']({ name: 'Cave', image_path: '/assets/maps/cave.png',
+    image_w: 500, image_h: 500, cell_size: 50, offset_x: 0, offset_y: 0 }).created_map_id;
+  const tokA = ops['token.create']({ label: 'Bat', kind: 'monster', col: 0, row: 0 }).created_token_id;
+  const mapB = ops['map.calibrate']({ name: 'Keep', image_path: '/assets/maps/keep.png',
+    image_w: 500, image_h: 500, cell_size: 50, offset_x: 0, offset_y: 0 }).created_map_id; // becomes active
+  const tokB = ops['token.create']({ label: 'Guard', kind: 'monster', col: 1, row: 1 }).created_token_id;
+  // the active map (Keep) only sends its own token
+  assert.deepStrictEqual(snapshotFor('dm', null).tokens.map((t) => t.id), [tokB]);
+  ops['map.set_active']({ map_id: mapA });
+  assert.deepStrictEqual(snapshotFor('dm', null).tokens.map((t) => t.id), [tokA]);
+  // deleting a map cascades its own tokens away, leaving the others untouched
+  ops['map.delete']({ map_id: mapA });
+  assert.ok(!state.tokens.has(tokA), 'a token outlived the map it was deleted with');
+  assert.ok(state.tokens.has(tokB));
+  ops['map.delete']({ map_id: mapB });
 });
 
 console.log(`\nAll ${passed} checks passed. The fire burns true. 🔥`);

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campfire Saga — How to Play</title>
-<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/app.css?v=4">
 </head>
 <body>
 <div class="wrap">
@@ -130,5 +130,19 @@
   <p class="center" style="margin-top:30px"><a href="/play"><button class="primary">⚔ Make my character</button></a></p>
 </div>
 <script src="/js/learn.js"></script>
+<script>
+// This page is served on BOTH the player port (3000) and the GM port (3001).
+// Player routes ("/", "/play") only exist on the player port, so when this page
+// is opened on any other port, repoint those links at the player port.
+(function () {
+  var PLAYER_PORT = '3000';
+  if (location.port && location.port !== PLAYER_PORT) {
+    var base = location.protocol + '//' + location.hostname + ':' + PLAYER_PORT;
+    document.querySelectorAll('a[href="/"], a[href="/play"]').forEach(function (a) {
+      a.href = base + a.getAttribute('href');
+    });
+  }
+})();
+</script>
 </body>
 </html>
