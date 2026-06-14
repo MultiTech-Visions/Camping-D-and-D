@@ -40,6 +40,22 @@
   let transitionImg = null;
   let transitionTimer = null;
   let lastScreenKey = null;
+  // Warm the bumper splash images into the decoded-texture cache as soon as a
+  // snapshot names them, so when a screen swap actually fires the fade never
+  // stalls decoding a cold 4K image on the main thread (the visible hitch).
+  const transitionImgCache = new Map();
+  function preloadTransitionImages(snap) {
+    const imgs = (snap.settings && snap.settings.transition_images) || {};
+    for (const k in imgs) {
+      const url = imgs[k];
+      if (!url || transitionImgCache.has(url)) continue;
+      const im = new Image();
+      im.decoding = 'async';
+      im.src = url;
+      if (im.decode) im.decode().catch(() => {});
+      transitionImgCache.set(url, im);
+    }
+  }
   function screenKeyOf(snap) {
     if (snap.revealed_card) return 'reveal:' + snap.revealed_card.id;
     if (snap.map) return 'map:' + snap.map.id;
@@ -378,6 +394,7 @@
     role: 'display',
     onSnapshot(snap) {
       reportViewport();
+      preloadTransitionImages(snap);
 
       // Bump a splash over the swap when the projected screen changes. Fire it
       // BEFORE applying the new content so the cover rises as things change (no
@@ -490,9 +507,14 @@
   const ctx = canvas.getContext('2d');
   let embers = [];
 
+  // Cap the ember BUFFER and let CSS stretch it to fill the screen: a 4K
+  // projector would otherwise clear an 8.3-megapixel canvas every frame for a
+  // 40-particle field. ~1080p backing is plenty; the GPU scales it up for free.
+  const EMBER_MAX_DIM = 1920;
   function resize() {
-    canvas.width = innerWidth;
-    canvas.height = innerHeight;
+    const scale = Math.min(1, EMBER_MAX_DIM / Math.max(innerWidth, innerHeight));
+    canvas.width = Math.max(1, Math.round(innerWidth * scale));
+    canvas.height = Math.max(1, Math.round(innerHeight * scale));
   }
   addEventListener('resize', resize);
   resize();
@@ -516,7 +538,11 @@
   }
 
   function tick() {
-    if (!document.body.classList.contains('map-mode')) {
+    // Skip the field in map mode and while a full-screen reveal is open — both
+    // fully occlude the embers, so drawing them is wasted frame budget right
+    // when the transition needs it most.
+    const occluded = CampfireNPCReveal.isOpen();
+    if (!document.body.classList.contains('map-mode') && !occluded) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const e of embers) {
         e.y -= e.vy;

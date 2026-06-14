@@ -13,11 +13,21 @@
 window.CampfireNpcFx = (function () {
   function start(canvas, effect) {
     if (!effect || effect === 'none') return { stop() {} };
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true });
     let raf = null;
+    // Cap the particle BUFFER resolution and let CSS stretch it to fill the
+    // screen. A 4K projector would otherwise clear + refill an 8.3-megapixel
+    // canvas every frame (the field doesn't need 4K crispness) — capping the
+    // backing store to ~1080p quarters that per-frame fill cost while the GPU
+    // scales the result up for free. The particle math runs in buffer space, so
+    // nothing else changes; particles just render a touch larger when stretched.
+    const MAX_BUFFER_DIM = 1920;
     const resize = () => {
-      canvas.width = canvas.offsetWidth || canvas.clientWidth || window.innerWidth;
-      canvas.height = canvas.offsetHeight || canvas.clientHeight || window.innerHeight;
+      const cw = canvas.offsetWidth || canvas.clientWidth || window.innerWidth;
+      const ch = canvas.offsetHeight || canvas.clientHeight || window.innerHeight;
+      const scale = Math.min(1, MAX_BUFFER_DIM / Math.max(cw, ch));
+      canvas.width = Math.max(1, Math.round(cw * scale));
+      canvas.height = Math.max(1, Math.round(ch * scale));
     };
     resize();
     window.addEventListener('resize', resize);

@@ -152,12 +152,26 @@ window.CampfireNPCReveal = (function () {
       `<circle cx="${x1}" cy="${y1}" r="5" class="link-dot"/>` +
       `<circle cx="${x2}" cy="${y2}" r="6" class="link-dot"/>`;
   }
-  function refreshLink() { if (cur) requestAnimationFrame(drawLink); }
+  // Coalesce link redraws to at most one per frame. The projector's text
+  // auto-crawl fires a scroll event every frame, and each redraw forces a
+  // synchronous layout (getBoundingClientRect) plus an SVG reparse — collapsing
+  // a frame's worth of triggers into a single draw keeps the crawl smooth.
+  let linkRaf = 0;
+  function refreshLink() {
+    if (!cur || linkRaf) return;
+    linkRaf = requestAnimationFrame(() => { linkRaf = 0; drawLink(); });
+  }
 
   function imgIndexOf(npc) { return typeof npc.image_index === 'number' ? npc.image_index : null; }
 
   function stopAuto() {
     if (cur && cur.timer) { clearInterval(cur.timer); cur.timer = null; }
+  }
+
+  // Cancel a running transform-pan (the held-image ping-pong). The auto-advance
+  // pan is a plain CSS transition and needs no explicit teardown.
+  function stopPan() {
+    if (cur && cur.panAnim) { cur.panAnim.cancel(); cur.panAnim = null; }
   }
 
   // --- projector text auto-scroll -------------------------------------------
@@ -321,11 +335,14 @@ window.CampfireNPCReveal = (function () {
 
   // Reset the two stacked <img> layers to a fresh image list (showing the first).
   function setImages(images) {
+    stopPan();
     cur.images = images.slice();
     cur.slideIdx = 0;
     const has = images.length > 0;
     cur.imgA.style.display = cur.imgB.style.display = has ? 'block' : 'none';
     cur.frameEl.classList.toggle('empty', !has);
+    // clear any leftover pan geometry/transform on both layers before showing
+    fitSlide(cur.imgA); fitSlide(cur.imgB);
     cur.activeImg = cur.imgA;
     if (has) {
       cur.imgA.src = images[0];
@@ -339,8 +356,10 @@ window.CampfireNPCReveal = (function () {
     if (!cur.images.length) return;
     i = ((i % cur.images.length) + cur.images.length) % cur.images.length;
     if (i === cur.slideIdx) return;
+    stopPan(); // the outgoing image's pan stops; panAndSchedule re-pans the new one
     const next = cur.activeImg === cur.imgA ? cur.imgB : cur.imgA;
     next.src = cur.images[i];
+    fitSlide(next); // start clean; panImage sets the pan geometry once loaded
     next.style.opacity = '1';
     cur.activeImg.style.opacity = '0';
     cur.activeImg = next;
@@ -350,32 +369,70 @@ window.CampfireNPCReveal = (function () {
 
   // A too-wide image (wider aspect than the frame) slowly scrolls left→right so
   // the whole picture is seen; returns how long the slide should linger (pan +
-  // a hold at the end, or a plain rest for images that already fit). The opacity
-  // cross-fade rides alongside the object-position transition so both animate.
+  // a hold at the end, or a plain rest for images that already fit).
   const PAN_MS = 9000, HOLD_MS = 2500, REST_MS = 7000, EDGE_HOLD_MS = 2000;
-  // Scroll a too-wide image (wider aspect than the frame) so the whole picture
-  // is seen. loop=true (a HELD image) ping-pongs left↔right forever; loop=false
-  // (auto slideshow) does a single left→right and returns how long to linger.
-  function panImage(imgEl, loop) {
-    imgEl.style.animation = 'none';
-    imgEl.style.transition = 'opacity 1.1s ease';
-    imgEl.style.objectPosition = '50% 50%';
+
+  // How far a height-filled image overflows the frame horizontally, in px —
+  // i.e. how far it can pan. 0 when the image already fits the frame (no pan).
+  function panOverflowPx(imgEl) {
     const fr = cur.frameEl ? cur.frameEl.getBoundingClientRect() : null;
     const nw = imgEl.naturalWidth, nh = imgEl.naturalHeight;
-    if (!fr || !fr.width || !fr.height || !nw || !nh) return REST_MS;
-    if (nw / nh <= (fr.width / fr.height) * 1.05) return REST_MS; // fits — no pan
-    imgEl.style.objectPosition = '0% 50%';
-    void imgEl.offsetWidth; // commit the left edge before animating
+    if (!fr || !fr.width || !fr.height || !nw || !nh) return 0;
+    if (nw / nh <= (fr.width / fr.height) * 1.05) return 0; // fits — no pan
+    return fr.height * (nw / nh) - fr.width;
+  }
+
+  // Restore a slide to the stylesheet default: fill the frame, object-fit cover
+  // centers/crops it (inset:0 + 100%/100%), no transform. Used for images that
+  // fit and to clear pan geometry before the next image.
+  function fitSlide(imgEl) {
+    imgEl.style.width = imgEl.style.height = '';
+    imgEl.style.left = imgEl.style.top = imgEl.style.right = imgEl.style.bottom = '';
+    imgEl.style.objectPosition = '50% 50%';
+    imgEl.style.transform = 'none';
+  }
+
+  // Scroll a too-wide image so the whole picture is seen, panning with a GPU-
+  // composited `transform: translateX` instead of animating `object-position`.
+  // object-position can't be promoted to the compositor, so the old version
+  // forced a full main-thread REPAINT of the (4K) image on every frame — the
+  // single worst offender behind the projector's single-digit fps. Instead we
+  // size the slide to its NATURAL width (height-filled, so it renders pixel-for-
+  // pixel like cover-fit) and let the frame's overflow:hidden crop it; sliding
+  // that wider element with a transform reveals the image left→right identically
+  // but rides entirely on the GPU. loop=true (a HELD image) ping-pongs forever;
+  // loop=false (auto slideshow) does a single left→right and returns its linger.
+  function panImage(imgEl, loop) {
+    stopPan();
+    imgEl.style.animation = 'none';
+    imgEl.style.transition = 'opacity 1.1s ease';
+    const overflow = panOverflowPx(imgEl);
+    if (overflow <= 0) { fitSlide(imgEl); return REST_MS; } // fits — centered, no pan
+    // overflow the element to natural width, anchored at the frame's left edge,
+    // so the frame clips it and a translate pans across the whole picture
+    imgEl.style.right = imgEl.style.bottom = 'auto';
+    imgEl.style.left = imgEl.style.top = '0';
+    imgEl.style.width = 'auto';
+    imgEl.style.height = '100%';
+    imgEl.style.objectPosition = '50% 50%';
+    imgEl.style.transform = 'translateX(0)';
+    void imgEl.offsetWidth; // commit the start state before animating
     if (loop) {
       // ping-pong left↔right with a ~2s dwell at each end so the held image
-      // settles before reversing. The npcpanpong keyframes bake the dwells in,
-      // so one full cycle = pan + hold, out and back.
-      const cycle = 2 * (PAN_MS + EDGE_HOLD_MS);
-      imgEl.style.animation = `npcpanpong ${cycle}ms linear infinite`;
+      // settles before reversing. The keyframe offsets bake the dwells in, so
+      // one full cycle = pan + hold, out and back. Web Animations keeps it on
+      // the compositor and lets the dwell distances key off this image's px.
+      cur.panAnim = imgEl.animate([
+        { transform: 'translateX(0)', offset: 0 },
+        { transform: 'translateX(0)', offset: 0.091 },
+        { transform: `translateX(${-overflow}px)`, offset: 0.5 },
+        { transform: `translateX(${-overflow}px)`, offset: 0.591 },
+        { transform: 'translateX(0)', offset: 1 },
+      ], { duration: 2 * (PAN_MS + EDGE_HOLD_MS), iterations: Infinity, easing: 'linear' });
       return Infinity; // held — never advance
     }
-    imgEl.style.transition = `opacity 1.1s ease, object-position ${PAN_MS}ms linear`;
-    imgEl.style.objectPosition = '100% 50%';
+    imgEl.style.transition = `opacity 1.1s ease, transform ${PAN_MS}ms linear`;
+    imgEl.style.transform = `translateX(${-overflow}px)`;
     return PAN_MS + HOLD_MS;
   }
 
@@ -432,8 +489,8 @@ window.CampfireNPCReveal = (function () {
     overlay.append(bgEl, fx);
     const portrait = el(`<div class="npc-reveal-portrait"></div>`);
     const frameEl = el(`<div class="npc-frame"></div>`);
-    const imgA = el(`<img class="npc-slide" draggable="false" alt="">`);
-    const imgB = el(`<img class="npc-slide" draggable="false" alt="">`);
+    const imgA = el(`<img class="npc-slide" draggable="false" decoding="async" alt="">`);
+    const imgB = el(`<img class="npc-slide" draggable="false" decoding="async" alt="">`);
     frameEl.append(
       el(`<span class="npc-frame-corner tl"></span>`),
       el(`<span class="npc-frame-corner tr"></span>`),
@@ -462,9 +519,9 @@ window.CampfireNPCReveal = (function () {
     }
 
     document.body.appendChild(overlay);
-    const onResize = () => drawLink();
+    const onResize = () => refreshLink();
     window.addEventListener('resize', onResize);
-    sectionsHost.addEventListener('scroll', () => drawLink(), { passive: true });
+    sectionsHost.addEventListener('scroll', () => refreshLink(), { passive: true });
     cur = {
       overlay, npcId: npc.id, imgA, imgB, frameEl, activeImg: imgA, images: [], slideIdx: 0, timer: null,
       sectionsHost, nameEl, subEl, onClose, mode: null,
@@ -552,6 +609,7 @@ window.CampfireNPCReveal = (function () {
 
   function hide() {
     stopAuto();
+    stopPan();
     stopCrawl();
     removeFocusPopup(true);
     stopFx();
