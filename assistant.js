@@ -66,17 +66,11 @@ const SYSTEM_PROMPT = `You are the Campfire Saga campaign assistant — a creati
 
 The app supports two systems: "campfire" (a homebrew narrative-dice game with four attributes — brawn, constitution, magic, wits, each rank 0..5) and "dnd5e" (standard D&D 5e character sheets). It is system-agnostic for the story content below.
 
-You can author three things:
-
-1) CARDS — the heart of campaign prep. A card is a full-screen "reveal" with a portrait/slideshow and toggleable text. Three kinds:
+You can author campaign content as CARDS — the heart of campaign prep. A card is a full-screen "reveal" with a portrait/slideshow and toggleable text. Three kinds:
    • "npc" — a monster or character; its first image doubles as a battle-map token.
    • "location" — a place the party arrives at.
    • "story" — a narrated beat, handout, or scene.
    A card has: name, subtitle (short, <=120 chars), notes (GM-only, never shown to players), bg_effect (one of: none, embers, snow, rain, motes, arcane), an images[] slideshow, and sections[]. Each section = { title, visible, entries:[ { label, text, visible, images } ] }. Sections/entries are how a scene unfolds: the GM toggles entries on/off live during play, so author plenty of them. Keep entry text vivid but tight (a paragraph or two).
-
-2) CHARACTERS — pre-generated NPCs or player characters (campfire heroes or dnd5e sheets).
-
-3) CLOCKS — progress/danger timers (segmented circles) that drive tension.
 
 IMAGES: To add art, call generate_image with a rich visual prompt; it returns an image_path. Then put that path into a card's images[] array, a section/entry's images[], or bg_image, or a character's token_art via the update tools. Always generate a portrait for NPCs and a scene image for locations unless told otherwise.
 
@@ -87,7 +81,7 @@ WORKFLOW: First call get_overview to see what already exists so you build on it 
 const TOOL_DEFS = [
   {
     name: 'get_overview',
-    description: 'List everything currently in the campaign (cards, characters, clocks) so you can build on it and avoid duplicates. Call this first.',
+    description: 'List the cards currently in the campaign so you can build on them and avoid duplicates. Call this first.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -179,79 +173,6 @@ const TOOL_DEFS = [
       required: ['prompt'], additionalProperties: false,
     },
   },
-  {
-    name: 'create_character',
-    description: 'Create a pre-generated character (NPC or PC). For campfire, pass attributes summing to 4 (each 0..2). For dnd5e, pass a dnd object; sensible defaults fill the rest. Returns char_id.',
-    parameters: {
-      type: 'object',
-      properties: {
-        system: { type: 'string', enum: config.SYSTEMS },
-        name: { type: 'string' },
-        concept: { type: 'string', description: 'One-line description.' },
-        flavor: { type: 'string' },
-        gear: { type: 'string' },
-        notes: { type: 'string' },
-        hidden_desire: { type: 'string', description: 'A GM-only secret motivation.' },
-        token_art: { type: 'string', description: 'A generate_image path for the portrait.' },
-        attributes: {
-          type: 'object', description: 'campfire only; must sum to 4, each 0..2.',
-          properties: {
-            brawn: { type: 'integer' }, constitution: { type: 'integer' },
-            magic: { type: 'integer' }, wits: { type: 'integer' },
-          },
-          additionalProperties: false,
-        },
-        dnd: {
-          type: 'object', description: 'dnd5e only.',
-          properties: {
-            class_name: { type: 'string' }, race: { type: 'string' },
-            level: { type: 'integer' },
-            abilities: {
-              type: 'object',
-              properties: {
-                str: { type: 'integer' }, dex: { type: 'integer' }, con: { type: 'integer' },
-                int: { type: 'integer' }, wis: { type: 'integer' }, cha: { type: 'integer' },
-              },
-              additionalProperties: false,
-            },
-            ac: { type: 'integer' }, hp_max: { type: 'integer' }, speed: { type: 'integer' },
-            prof_bonus: { type: 'integer' },
-          },
-          additionalProperties: false,
-        },
-      },
-      required: ['system', 'name', 'concept'], additionalProperties: false,
-    },
-  },
-  {
-    name: 'update_character',
-    description: 'Edit a character\'s text fields or portrait.',
-    parameters: {
-      type: 'object',
-      properties: {
-        char_id: { type: 'integer' },
-        name: { type: 'string' }, concept: { type: 'string' },
-        flavor: { type: 'string' }, gear: { type: 'string' }, notes: { type: 'string' },
-        hidden_desire: { type: 'string' },
-        token_art: { type: 'string', description: 'A generate_image path.' },
-      },
-      required: ['char_id'], additionalProperties: false,
-    },
-  },
-  {
-    name: 'create_clock',
-    description: 'Create a progress or danger clock (a segmented tension timer).',
-    parameters: {
-      type: 'object',
-      properties: {
-        label: { type: 'string' },
-        segments: { type: 'integer', enum: config.CLOCK_SEGMENT_CHOICES },
-        kind: { type: 'string', enum: config.CLOCK_KINDS },
-        visibility: { type: 'string', enum: config.CLOCK_VISIBILITIES },
-      },
-      required: ['label', 'segments', 'kind', 'visibility'], additionalProperties: false,
-    },
-  },
 ];
 
 // --- image generation -------------------------------------------------------
@@ -270,33 +191,6 @@ async function generateImage(prompt, size) {
   return `/assets/tokens/${name}`;
 }
 
-// --- dnd sheet builder (fills a valid sheet from a few high-level fields) ----
-function buildDndSheet(d) {
-  const cfg = config.DND;
-  const src = d || {};
-  const ab = src.abilities || {};
-  const hp = src.hp_max && src.hp_max > 0 ? src.hp_max : 8;
-  return {
-    class_name: src.class_name || 'Adventurer',
-    race: src.race || '',
-    level: src.level || 1,
-    abilities: Object.fromEntries(cfg.ABILITIES.map((a) => [a, ab[a] || 10])),
-    ac: src.ac || 10,
-    hp_max: hp,
-    hp,
-    temp_hp: 0,
-    speed: src.speed || 30,
-    prof_bonus: src.prof_bonus || 2,
-    inspiration: false,
-    death_successes: 0,
-    death_failures: 0,
-    spell_slots: Array.from({ length: cfg.SPELL_LEVELS }, () => ({ max: 0, used: 0 })),
-    skills: Object.fromEntries(cfg.SKILLS.map((s) => [s.key, { prof: 0, misc: 0 }])),
-    custom_skills: [],
-    spells: [],
-  };
-}
-
 // --- the one tool executor (shared by voice + text) -------------------------
 // Returns a plain object the model receives as the tool result. Mutating tools
 // broadcast a fresh snapshot so any open /dm or /display updates live.
@@ -306,8 +200,6 @@ async function executeTool(name, args, broadcast) {
     case 'get_overview':
       return {
         cards: [...state.cards.values()].map((c) => ({ id: c.id, kind: c.kind, name: c.name, subtitle: c.subtitle })),
-        characters: [...state.characters.values()].map((c) => ({ id: c.id, system: c.system, name: c.name, concept: c.concept })),
-        clocks: [...state.clocks.values()].map((c) => ({ id: c.id, label: c.label, kind: c.kind, filled: c.filled, segments: c.segments })),
       };
 
     case 'get_card': {
@@ -340,44 +232,6 @@ async function executeTool(name, args, broadcast) {
     case 'generate_image': {
       const image_path = await generateImage(a.prompt, a.size);
       return { image_path };
-    }
-
-    case 'create_character': {
-      const base = {
-        system: a.system, name: a.name, concept: a.concept,
-        flavor: a.flavor, gear: a.gear, notes: a.notes,
-        hidden_desire: a.hidden_desire, token_art: a.token_art,
-      };
-      let payload;
-      if (a.system === 'dnd5e') {
-        payload = { ...base, sheet: buildDndSheet(a.dnd) };
-      } else {
-        const at = a.attributes || {};
-        payload = {
-          ...base,
-          brawn: at.brawn || 0, constitution: at.constitution || 0,
-          magic: at.magic || 0, wits: at.wits || 0,
-        };
-      }
-      const r = ops['character.create'](payload);
-      broadcast();
-      return r; // { created_char_id }
-    }
-
-    case 'update_character': {
-      const p = { char_id: a.char_id };
-      for (const k of ['name', 'concept', 'flavor', 'gear', 'notes', 'hidden_desire', 'token_art']) {
-        if (a[k] !== undefined) p[k] = a[k];
-      }
-      ops['character.update_sheet'](p);
-      broadcast();
-      return { ok: true };
-    }
-
-    case 'create_clock': {
-      const r = ops['clock.create']({ label: a.label, segments: a.segments, kind: a.kind, visibility: a.visibility });
-      broadcast();
-      return r; // { created_clock_id }
     }
 
     default:

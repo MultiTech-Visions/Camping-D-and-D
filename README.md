@@ -106,9 +106,8 @@ Before a trip — while the Pi still has internet — open **`/assist`** on the 
 campaign with an AI helper. Describe what you want ("a smuggler NPC who runs the docks,
 the tavern they drink in, and an opening story beat") and it **fleshes out the details
 for you**: it writes NPC / location / story reveal cards, generates portrait and scene
-art, drafts vivid section text, and can pre-build characters and clocks — all saved
-straight into your campaign so it's there offline at the campsite. Everything it makes
-appears live on the GM screen as it works.
+art, and drafts vivid section text — all saved straight into your campaign so it's there
+offline at the campsite. Everything it makes appears live on the GM screen as it works.
 
 You can **talk to it** (🎙 Start talking — realtime voice over WebRTC) or **type** to it.
 It's purely a preparation tool; at the campsite the Pi runs offline as always and this

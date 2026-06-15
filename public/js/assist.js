@@ -18,8 +18,6 @@ function logActivity(name, args, result) {
   row.className = 'row' + (isErr ? ' err' : '');
   const detail = isErr ? result.error
     : (result && (result.created_card_id ? `card #${result.created_card_id}`
-      : result.created_char_id ? `character #${result.created_char_id}`
-      : result.created_clock_id ? `clock #${result.created_clock_id}`
       : result.image_path ? 'image' : 'done'));
   row.innerHTML = `<b>${name}</b> — ${detail || ''}`;
   if (result && result.image_path) {
