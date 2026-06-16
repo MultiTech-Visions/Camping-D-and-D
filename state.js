@@ -25,7 +25,7 @@ mushroom.onChange((snap) => {
 // ---------------------------------------------------------------------------
 // State shape
 // ---------------------------------------------------------------------------
-// characters: Map<id, char>  char = DB row + runtime {drain, granted_blue, conditions[]}
+// characters: Map<id, char>  char = DB row + runtime {drain, blue_dice[], conditions[]}
 // clocks:     Map<id, clock>
 // initiative: { entries: [{id, char_id|null, label|null}], turn_id: string|null }
 //             — entries may be characters (id 'char:<n>') or free-standing
@@ -90,6 +90,30 @@ function zeroDrain() {
   return { brawn: 0, constitution: 0, magic: 0, wits: 0 };
 }
 
+// Blue (Boost) dice are banked per-character as an array of entries, each
+// carrying the origin note that says where/when it was earned — the heart of
+// the storytelling feature. Legacy DBs stored a bare integer count; migrate
+// those to that many noteless dice so nothing is lost.
+function loadBlueDice(rt) {
+  if (rt && Array.isArray(rt.blue_dice)) {
+    return rt.blue_dice.map((d, i) => ({
+      id: Number.isInteger(d.id) ? d.id : i + 1,
+      note: typeof d.note === 'string' ? d.note : '',
+      encounter: Number.isInteger(d.encounter) ? d.encounter : 0,
+      ts: typeof d.ts === 'string' ? d.ts : '',
+    }));
+  }
+  const legacy = rt && Number.isInteger(rt.granted_blue) ? rt.granted_blue : 0;
+  return Array.from({ length: Math.max(0, legacy) }, (_, i) => ({
+    id: i + 1, note: '', encounter: 0, ts: '',
+  }));
+}
+
+// Next free id within a character's banked dice (ids are unique per character).
+function nextBlueDieId(c) {
+  return c.blue_dice.reduce((m, d) => Math.max(m, d.id), 0) + 1;
+}
+
 function load() {
   const game = stmts.getGame.get();
   R.assert(game, 'corrupt DB: game singleton row missing');
@@ -131,7 +155,7 @@ function load() {
       ...row,
       dnd_sheet: sheet,
       drain: rt ? rt.drain : zeroDrain(),
-      granted_blue: rt ? rt.granted_blue : 0,
+      blue_dice: loadBlueDice(rt),
       conditions: [],
     });
   }
@@ -245,7 +269,7 @@ function load() {
 function persistRuntime() {
   const perChar = {};
   for (const [id, c] of state.characters) {
-    perChar[id] = { drain: c.drain, granted_blue: c.granted_blue };
+    perChar[id] = { drain: c.drain, blue_dice: c.blue_dice };
   }
   stmts.saveRuntime.run(JSON.stringify({
     perChar,
@@ -447,6 +471,13 @@ function assertTokenArt(value, name) {
   return value;
 }
 
+// Clock note: freeform GM bookkeeping, capped so the DB can't balloon.
+function assertClockNote(value) {
+  R.assertString(value, 'note');
+  R.assert(value.length <= 2000, 'note is too long (keep it under 2000 characters)');
+  return value;
+}
+
 function assertHexColor(value, name) {
   R.assert(typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value),
     `${name} must be a '#rrggbb' color, got ${JSON.stringify(value)}`);
@@ -523,7 +554,7 @@ const ops = {
     state.characters.set(id, {
       ...row, id,
       dnd_sheet: system === 'dnd5e' ? JSON.parse(row.dnd_sheet) : null,
-      drain: zeroDrain(), granted_blue: 0, conditions: [],
+      drain: zeroDrain(), blue_dice: [], conditions: [],
       device_id,
     });
     persistRuntime();
@@ -622,20 +653,52 @@ const ops = {
     persistRuntime();
   },
 
-  'character.grant_blue'(p) {
+  // Bank a single blue (Boost) die with the origin note that records where it
+  // came from. The note is required — capturing the story is the whole point.
+  'character.add_blue'(p) {
     const c = getChar(p.char_id);
     R.assert(c.system === 'campfire', 'blue dice apply only to Campfire Saga characters');
-    R.assertInt(p.amount, 'amount');
-    const next = c.granted_blue + p.amount;
-    R.assert(next >= 0, `${c.name} only has ${c.granted_blue} blue dice`);
-    c.granted_blue = next;
+    const note = R.assertNonEmptyString(p.note, 'note');
+    R.assert(note.length <= 500, 'note is too long (keep the origin to ~500 characters)');
+    c.blue_dice.push({
+      id: nextBlueDieId(c),
+      note,
+      encounter: c.encounters_done,
+      ts: new Date().toISOString(),
+    });
+    persistRuntime();
+  },
+
+  // Spend (remove) one banked blue die by id.
+  'character.spend_blue'(p) {
+    const c = getChar(p.char_id);
+    R.assert(c.system === 'campfire', 'blue dice apply only to Campfire Saga characters');
+    R.assertInt(p.die_id, 'die_id');
+    const i = c.blue_dice.findIndex((d) => d.id === p.die_id);
+    R.assert(i !== -1, `${c.name} has no banked blue die #${p.die_id}`);
+    c.blue_dice.splice(i, 1);
+    persistRuntime();
+  },
+
+  // Edit the origin note on a banked die (fix a typo, flesh out the story).
+  'character.edit_blue_note'(p) {
+    const c = getChar(p.char_id);
+    R.assert(c.system === 'campfire', 'blue dice apply only to Campfire Saga characters');
+    R.assertInt(p.die_id, 'die_id');
+    const die = c.blue_dice.find((d) => d.id === p.die_id);
+    R.assert(die, `${c.name} has no banked blue die #${p.die_id}`);
+    const note = R.assertNonEmptyString(p.note, 'note');
+    R.assert(note.length <= 500, 'note is too long (keep the origin to ~500 characters)');
+    die.note = note;
     persistRuntime();
   },
 
   // End-of-encounter refill (+ progression). All campfire characters when no
-  // char_id given. Drain and granted blue clear; encounters_done increments;
-  // every Nth encounter banks +1 attribute point to place (capped at CEILING by
-  // character.spend_point).
+  // char_id given. Drain clears; encounters_done increments; every Nth
+  // encounter banks +1 attribute point to place (capped at CEILING by
+  // character.spend_point). Banked blue dice deliberately PERSIST across
+  // encounters — players carry their noted dice forward to call back to the
+  // moments that earned them.
   'character.end_encounter_refill'(p) {
     const targets = p.char_id === undefined
       ? [...state.characters.values()].filter((c) => c.system === 'campfire')
@@ -645,7 +708,6 @@ const ops = {
       for (const c of targets) {
         if (c.system !== 'campfire') continue;
         c.drain = zeroDrain();
-        c.granted_blue = 0;
         c.encounters_done += 1;
         if (c.encounters_done % n === 0) c.pending_points += 1;
         persistCharacter(c);
@@ -817,11 +879,21 @@ const ops = {
       kind: R.assertOneOf(p.kind, config.CLOCK_KINDS, 'kind'),
       visibility: R.assertOneOf(p.visibility, config.CLOCK_VISIBILITIES, 'visibility'),
       token_id: p.token_id === undefined ? null : R.assertInt(p.token_id, 'token_id'),
+      note: assertClockNote(p.note === undefined ? '' : p.note),
     };
     const info = stmts.insertClock.run(row);
     const id = Number(info.lastInsertRowid);
     state.clocks.set(id, { ...row, id });
     return { created_clock_id: id };
+  },
+
+  // The GM's long-term note on a clock — where it came from, what it's for,
+  // anything worth remembering. GM-only bookkeeping; never reaches players or
+  // the projector (stripped in the role-scoped snapshots).
+  'clock.set_note'(p) {
+    const c = getClock(p.clock_id);
+    c.note = assertClockNote(p.note === undefined ? '' : p.note);
+    stmts.updateClock.run(c);
   },
 
   'clock.set_filled'(p) {
@@ -1486,7 +1558,9 @@ function publicCharacter(c, { includeHiddenDesire, includeSecretConditions, incl
     id: c.id, system: c.system, name: c.name, concept: c.concept,
     flavor: c.flavor, gear: c.gear, notes: c.notes, token_art: c.token_art,
     encounters_done: c.encounters_done, pending_points: c.pending_points,
-    drain: { ...c.drain }, granted_blue: c.granted_blue,
+    drain: { ...c.drain },
+    blue_dice: c.blue_dice.map((d) => ({ ...d })),
+    granted_blue: c.blue_dice.length, // derived count, kept for the dice-pool renderers
     // dm_only conditions are the GM's private notes — even about your own character
     conditions: c.conditions
       .filter((x) => includeSecretConditions || x.visibility === 'visible')
@@ -1612,18 +1686,20 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
     return {
       ...base,
       characters: playerChars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
-      clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+      // note is GM-only bookkeeping — strip it from player snapshots
+      clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
       device_name: deviceId ? ((state.devices.get(deviceId) || {}).name || '') : '',
       revealed_card: publicRevealedCard(),
       // shared party knowledge — visited locations + met NPCs, browsable any time
       known_cards: knownCards(),
     };
   }
-  // display: roster + visible clocks only; never hidden desires, never dm_only clocks.
+  // display: roster + visible clocks only; never hidden desires, never dm_only
+  // clocks, never the GM's private clock notes.
   return {
     ...base,
     characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false, includeSecretConditions: false })),
-    clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+    clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
     revealed_card: publicRevealedCard(),
   };
 }

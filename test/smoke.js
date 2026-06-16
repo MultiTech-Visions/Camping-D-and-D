@@ -148,19 +148,31 @@ check('drain + absorb + yellows-strip-via-rank', () => {
   throws(() => ops['character.set_drain']({ char_id: wizardId, attr: 'brawn', amount: 1 })); // not campfire
 });
 
-check('blue dice grant/spend, never negative', () => {
-  ops['character.grant_blue']({ char_id: heroId, amount: 2 });
-  ops['character.grant_blue']({ char_id: heroId, amount: -1 });
-  assert.strictEqual(state.characters.get(heroId).granted_blue, 1);
-  throws(() => ops['character.grant_blue']({ char_id: heroId, amount: -5 }));
+check('blue dice: noted entries, add/edit/spend by id', () => {
+  const c = state.characters.get(heroId);
+  ops['character.add_blue']({ char_id: heroId, note: 'saved the village from the flood' });
+  ops['character.add_blue']({ char_id: heroId, note: 'outwitted the river spirit' });
+  assert.strictEqual(c.blue_dice.length, 2);
+  assert.strictEqual(c.blue_dice[0].note, 'saved the village from the flood');
+  throws(() => ops['character.add_blue']({ char_id: heroId, note: '   ' })); // note required
+  throws(() => ops['character.add_blue']({ char_id: heroId })); // note required
+  const firstId = c.blue_dice[0].id;
+  ops['character.edit_blue_note']({ char_id: heroId, die_id: firstId, note: 'saved the WHOLE village' });
+  assert.strictEqual(c.blue_dice[0].note, 'saved the WHOLE village');
+  ops['character.spend_blue']({ char_id: heroId, die_id: firstId });
+  assert.strictEqual(c.blue_dice.length, 1);
+  assert.strictEqual(c.blue_dice[0].note, 'outwitted the river spirit');
+  throws(() => ops['character.spend_blue']({ char_id: heroId, die_id: firstId })); // already gone
 });
 
-check('end-encounter refill + progression every N', () => {
+check('end-encounter refill clears drain but BANKS blue dice', () => {
   const c = state.characters.get(heroId);
   const n = state.game.reward_every_n_encounters;
+  const bankedBefore = c.blue_dice.length;
+  assert.ok(bankedBefore > 0, 'expected a banked die going into refill');
   for (let i = 0; i < n; i++) ops['character.end_encounter_refill']({});
   assert.strictEqual(c.drain.brawn, 0);
-  assert.strictEqual(c.granted_blue, 0);
+  assert.strictEqual(c.blue_dice.length, bankedBefore); // banked dice persist across encounters
   assert.strictEqual(c.encounters_done, n);
   assert.strictEqual(c.pending_points, 1);
   ops['character.spend_point']({ char_id: heroId, attr: 'magic' });
@@ -254,15 +266,34 @@ check('clocks create/fill/visibility, bounds enforced', () => {
   throws(() => ops['clock.create']({ label: 'bad', segments: 5, kind: 'progress', visibility: 'visible' }));
 });
 
-check('role scoping: hidden desires + dm_only clocks never leak', () => {
+check('clock notes: create with a note, set/clear, length-capped', () => {
+  const id = ops['clock.create']({
+    label: 'The duke remembers', segments: 4, kind: 'danger', visibility: 'visible',
+    note: 'originated session 3 when they insulted him at the feast',
+  }).created_clock_id;
+  assert.strictEqual(state.clocks.get(id).note, 'originated session 3 when they insulted him at the feast');
+  ops['clock.set_note']({ clock_id: id, note: 'updated: he hired assassins' });
+  assert.strictEqual(state.clocks.get(id).note, 'updated: he hired assassins');
+  ops['clock.set_note']({ clock_id: id }); // omitted note clears it
+  assert.strictEqual(state.clocks.get(id).note, '');
+  throws(() => ops['clock.set_note']({ clock_id: id, note: 'x'.repeat(2001) })); // capped
+  ops['clock.delete']({ clock_id: id });
+});
+
+check('role scoping: hidden desires + dm_only clocks + clock notes never leak', () => {
+  // give the visible clock a GM-only note to prove it never reaches players/display
+  ops['clock.set_note']({ clock_id: clockId, note: 'GM eyes only: this is the warlord arriving' });
+
   const dm = snapshotFor('dm', null);
   assert.ok(dm.characters.find((c) => c.id === heroId).hidden_desire === 'wants the crown');
   assert.ok(dm.clocks.some((c) => c.id === secretId));
+  assert.strictEqual(dm.clocks.find((c) => c.id === clockId).note, 'GM eyes only: this is the warlord arriving');
 
   const otherPlayer = snapshotFor('player', wizardId, DEV);
   const heroSeen = otherPlayer.characters.find((c) => c.id === heroId);
   assert.strictEqual(heroSeen.hidden_desire, undefined, 'another player saw a hidden desire!');
   assert.ok(!otherPlayer.clocks.some((c) => c.id === secretId), 'a player saw a dm_only clock!');
+  assert.strictEqual(otherPlayer.clocks.find((c) => c.id === clockId).note, undefined, 'a player saw a GM clock note!');
 
   const ownPlayer = snapshotFor('player', heroId, DEV);
   assert.strictEqual(ownPlayer.characters.find((c) => c.id === heroId).hidden_desire, 'wants the crown');
@@ -270,6 +301,7 @@ check('role scoping: hidden desires + dm_only clocks never leak', () => {
   const display = snapshotFor('display', null);
   assert.ok(display.characters.every((c) => c.hidden_desire === undefined));
   assert.ok(!display.clocks.some((c) => c.id === secretId));
+  assert.ok(display.clocks.every((c) => c.note === undefined), 'the wall showed a GM clock note!');
 });
 
 check('reward rate live-tunable', () => {

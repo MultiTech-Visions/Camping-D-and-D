@@ -779,19 +779,49 @@
     if (me.effective.constitution === 0) attrCard.appendChild(el(`<p class="attr-zero center small">Constitution is gone — another failure and you're down for the count.</p>`));
     root.appendChild(attrCard);
 
-    // Blue dice
-    const blueCard = el(`<div class="card"><h3>Boost dice</h3></div>`);
-    const pool = el(`<div class="btn-row"></div>`);
-    pool.appendChild(CampfireDice.renderPool({ blue: me.granted_blue }, { large: true }));
-    blueCard.appendChild(pool);
-    const blueRow = el(`<div class="btn-row"></div>`);
-    const addBtn = el(`<button class="mini">+1 die</button>`);
-    addBtn.onclick = () => conn.action('character.grant_blue', { char_id: me.id, amount: 1 });
-    const useBtn = el(`<button class="mini ghost">Use a die</button>`);
-    useBtn.disabled = me.granted_blue <= 0;
-    useBtn.onclick = () => conn.action('character.grant_blue', { char_id: me.id, amount: -1 });
-    blueRow.append(addBtn, useBtn);
-    blueCard.appendChild(blueRow);
+    // Blue dice — banked Boost dice, each carrying the note of where it came
+    // from. Tap a die to spend it (with confirmation); the note is the story.
+    const blueCard = el(`<div class="card"><h3>Boost dice <span class="muted small">(${me.blue_dice.length} banked)</span></h3></div>`);
+    blueCard.appendChild(el(`<p class="muted small">Each die remembers where you earned it. Tap one to cash it in — and tie that past moment to what's happening right now.</p>`));
+    if (me.blue_dice.length === 0) {
+      blueCard.appendChild(el(`<p class="muted small">No banked dice yet — bank one below whenever you earn a Boost.</p>`));
+    }
+    for (const die of me.blue_dice) {
+      const row = el(`<div class="btn-row" style="gap:6px;align-items:stretch;margin:4px 0"></div>`);
+      const main = el(`<button class="mini" style="flex:1;text-align:left;display:flex;gap:8px;align-items:center;white-space:normal" title="Spend this die"></button>`);
+      main.append(el(`<span style="font-size:18px;line-height:1">🔷</span>`), el(`<span>${esc(die.note)}</span>`));
+      main.onclick = () => {
+        if (confirm(`Spend this Boost die?\n\n"${die.note}"\n\nThis removes it from your bank for good.`)) {
+          conn.action('character.spend_blue', { char_id: me.id, die_id: die.id });
+        }
+      };
+      const edit = el(`<button class="mini ghost" title="Edit the note">✎</button>`);
+      edit.onclick = () => {
+        const next = prompt('Where did this Boost die come from?', die.note);
+        if (next !== null && next.trim().length > 0 && next.trim() !== die.note) {
+          conn.action('character.edit_blue_note', { char_id: me.id, die_id: die.id, note: next.trim() });
+        }
+      };
+      row.append(main, edit);
+      blueCard.appendChild(row);
+    }
+    // Bank a new die. The note is required — capturing the moment is the point.
+    const addWrap = el(`<div class="btn-row" style="gap:6px;margin-top:8px"></div>`);
+    const noteInput = el(`<input type="text" maxlength="500" placeholder="Where did this die come from? (required)" style="flex:1">`);
+    const addBtn = el(`<button class="mini">+ Bank a die</button>`);
+    addBtn.disabled = true;
+    noteInput.oninput = () => { addBtn.disabled = noteInput.value.trim().length === 0; };
+    const bank = () => {
+      const note = noteInput.value.trim();
+      if (note.length === 0) return;
+      conn.action('character.add_blue', { char_id: me.id, note });
+      noteInput.value = '';
+      addBtn.disabled = true;
+    };
+    addBtn.onclick = bank;
+    noteInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); bank(); } };
+    addWrap.append(noteInput, addBtn);
+    blueCard.appendChild(addWrap);
     root.appendChild(blueCard);
 
     root.appendChild(tokenRemote(me));

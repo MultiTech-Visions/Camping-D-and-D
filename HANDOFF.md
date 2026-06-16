@@ -183,7 +183,12 @@ encounters_done INTEGER NOT NULL       # drives progression; starts 0
 **Runtime-only (in-memory state):**
 ```
 drain: { brawn, constitution, magic, wits }   # ranks drained THIS encounter; 0 at start
-granted_blue: INTEGER                          # blue dice granted to this character; 0 at start
+blue_dice: [ {id, note, encounter, ts} ]       # BANKED Boost dice, each with a required
+                                               #   origin note (where/when it was earned).
+                                               #   Persists across encounters; spent by id.
+                                               #   Legacy integer counts migrate to noteless
+                                               #   dice on load. (snapshot also exposes
+                                               #   granted_blue = blue_dice.length for renderers)
 conditions: [condition]
 in_initiative: BOOLEAN
 initiative_order: INTEGER
@@ -193,7 +198,7 @@ initiative_order: INTEGER
 ```
 effective_rank(attr) = base_attr - drain[attr]      # throw if < 0 (corrupt state)
 diceForRank(effective_rank) -> {green, yellow}        # the §1 mapping; throw if out of 0..5
-# total pool also adds granted_blue (consumed on use) and the GM's negative dice.
+# total pool also adds blue_dice.length (consumed on use) and the GM's negative dice.
 ```
 No proficiency fields exist. There is no "yellows last" tracker — yellows-first-on-drain falls out of re-deriving dice from the reduced rank.
 
@@ -213,6 +218,10 @@ filled      INTEGER NOT NULL      # 0..segments; throw if out of range
 kind        TEXT NOT NULL         # 'progress' | 'danger'
 visibility  TEXT NOT NULL         # 'visible' | 'dm_only'
 token_id    INTEGER               # nullable optional attachment
+note        TEXT NOT NULL DEFAULT ''  # GM-only long-term bookkeeping (origin,
+                                  #   purpose, reminders). Even on a 'visible'
+                                  #   clock the note is GM-only — stripped from
+                                  #   player + display snapshots.
 ```
 
 ### `token` (map only — Phase 3+)
@@ -256,18 +265,20 @@ Character/play:
 - `character.update_sheet` `{char_id, flavor?, gear?, notes?}`
 - `character.set_drain` `{char_id, attr, amount}` — set current rank-drain on an attribute; validate 0..base_rank.
 - `character.absorb_with_con` `{char_id}` — drain 1 Constitution instead of the used attribute.
-- `character.grant_blue` `{char_id, amount}` — GM or peer grants blue dice.
-- `character.end_encounter_refill` `{char_id?}` — refill all drain + clear granted_blue (all chars if no id); increment `encounters_done`; apply progression: when `encounters_done % reward_every_n_encounters == 0`, the character is owed +1 attribute point (surface a prompt/marker for the player to place it, capped at rank 5).
+- `character.add_blue` `{char_id, note}` — bank one Boost die with its (required) origin note; records the `encounter` number + timestamp.
+- `character.spend_blue` `{char_id, die_id}` — cash in (remove) one banked die by id.
+- `character.edit_blue_note` `{char_id, die_id, note}` — revise a banked die's origin note.
+- `character.end_encounter_refill` `{char_id?}` — refill all drain (all chars if no id); increment `encounters_done`; apply progression: when `encounters_done % reward_every_n_encounters == 0`, the character is owed +1 attribute point (surface a prompt/marker for the player to place it, capped at rank 5). **Banked blue dice persist across encounters** — they are not cleared here.
 Conditions: `condition.add` `{char_id, kind}` / `condition.remove` `{condition_id}`.
 Initiative: `initiative.add`/`initiative.remove` `{char_id}`, `initiative.reorder` `{ordered_char_ids}`, `initiative.set_turn` `{char_id}`.
-Clocks: `clock.create` `{label, segments, kind, visibility, token_id?}`, `clock.set_filled` `{clock_id, filled}` (validate 0..segments), `clock.set_visibility` `{clock_id, visibility}` (the reveal), `clock.delete` `{clock_id}`.
+Clocks: `clock.create` `{label, segments, kind, visibility, token_id?, note?}`, `clock.set_filled` `{clock_id, filled}` (validate 0..segments), `clock.set_visibility` `{clock_id, visibility}` (the reveal), `clock.set_note` `{clock_id, note}` (GM-only long-term note; omit/empty to clear), `clock.delete` `{clock_id}`.
 Map/camera (Phase 3+): `map.upload` (HTTP, §6) then `map.calibrate` `{image_path, cell_size, offset_x, offset_y}`, `map.set_active`, `token.create`/`token.move` `{token_id, col, row}`/`token.delete`, `camera.update` `{center_x, center_y, zoom, rotation}`.
 Game: `game.set_reward_rate` `{reward_every_n_encounters}` — live tuning.
 
 ### State scoping (enforce server-side; do not send-then-hide)
-- **player:** all characters' public fields, all `visible` clocks, conditions, initiative, camera. Receives its OWN `hidden_desire` but never another character's, and never `dm_only` clocks.
-- **dm:** everything, including all `hidden_desire` and all `dm_only` clocks.
-- **display:** map, tokens, `visible` clocks, roster (names/conditions/initiative), camera. Never `hidden_desire`, never `dm_only` clocks.
+- **player:** all characters' public fields, all `visible` clocks (without the GM `note`), conditions, initiative, camera. Receives its OWN `hidden_desire` but never another character's, and never `dm_only` clocks.
+- **dm:** everything, including all `hidden_desire`, all `dm_only` clocks, and all clock `note`s.
+- **display:** map, tokens, `visible` clocks, roster (names/conditions/initiative), camera. Never `hidden_desire`, never `dm_only` clocks, never clock `note`s.
 
 ---
 
@@ -358,7 +369,7 @@ Target 1080p, not 4K. Coexists with the user's projection-mapping use at other t
 **Phase 1 — Playable core + teaching aid (no map, no projector).**
 - Server scaffold: Express, `ws`, `better-sqlite3`, `config.js`, `rules.js` (`diceForRank`), systemd, fail-loud from the start.
 - WebSocket state-sync with role-scoped snapshots (enforce `hidden_desire` / `dm_only` scoping server-side from day one).
-- Player: character builder (plus/minus steppers, "points remaining", green dice images appearing per rank and a yellow at rank 4–5; optional flavor label; hidden desire field) + tracker tab (per-attribute drain, Constitution buffer, conditions, gear, notes, granted blue dice).
+- Player: character builder (plus/minus steppers, "points remaining", green dice images appearing per rank and a yellow at rank 4–5; optional flavor label; hidden desire field) + tracker tab (per-attribute drain, Constitution buffer, conditions, gear, notes, banked blue dice with origin notes).
 - GM: dashboard of all character cards incl. hidden desires; add/remove conditions; set drain / absorb-with-con; grant blue; end-encounter refill (applies progression); live reward-rate (`N`) control.
 - `learn.html` teaching page with both placeholder tables.
 - **Exit:** the group makes characters, the GM runs a full encounter (drain, conditions, refill, progression), everyone can learn the system from `/learn`. Fully playable on phones alone.
