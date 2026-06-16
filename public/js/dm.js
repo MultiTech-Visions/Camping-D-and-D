@@ -457,6 +457,26 @@
     partRow.appendChild(partBtn);
     box.appendChild(partRow);
 
+    // --- Mushroom lamp (BLE campfire on the projector stand) ---
+    box.appendChild(el(`<h4 style="margin:16px 0 4px">🍄 Mushroom lamp</h4>`));
+    box.appendChild(el(`<p class="muted small" style="margin:0 0 8px">The projector stand glows like a campfire — nice ambiance when there's no real fire going. Keep the Pi within ~1m of it.</p>`));
+    const m = Object.assign({ on: false, status: 'off', detail: '' }, snap.mushroom || {});
+    const mLabel = !m.on ? '🔥 Light the flame'
+      : m.status === 'on' ? '✓ Flame burning — tap to stop'
+      : m.status === 'error' ? '⚠ Trouble — tap to stop'
+      : m.status === 'searching' ? '🔍 Finding the light… — tap to stop'
+      : '… lighting';
+    const mRow = el(`<div class="btn-row" style="align-items:center"></div>`);
+    const mBtn = el(`<button class="mini ${m.on ? 'primary' : 'ghost'}">${mLabel}</button>`);
+    mBtn.onclick = () => conn.action('mushroom.set', { on: !m.on });
+    mRow.appendChild(mBtn);
+    // Live detail while it's on but not yet burning (searching / recovering / error).
+    if (m.on && m.status !== 'on' && m.detail) {
+      const warn = m.status === 'error';
+      mRow.appendChild(el(`<span class="small" style="color:${warn ? 'var(--ember)' : 'var(--muted, #999)'}">${esc(m.detail)}</span>`));
+    }
+    box.appendChild(mRow);
+
     return box;
   }
 

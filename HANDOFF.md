@@ -382,6 +382,32 @@ Tiling for oversized maps and custom GM-defined conditions are **out of scope**;
 
 ---
 
+## 10b. Mushroom lamp (BLE campfire — projector-stand ambiance)
+
+The projector sits on a "mushroom" stand lit by a **Magic Lantern** BLE LED
+controller (`config.MUSHROOM_ADDRESS` = `BE:28:55:00:10:24`, name `MELK-OA21`).
+The GM can toggle it to glow like a campfire — ambiance when there's no real
+fire. **GM screen → ⚙ Settings → 🍄 Mushroom lamp.**
+
+- **WS op** `mushroom.set {on: boolean}` (DM action). Memory-only status in
+  `state.mushroom = {on, status, detail}` — **not persisted** (a restart never
+  lights the camp on its own); included in every snapshot for the GM toggle.
+- **`mushroom.js`** spawns/kills a Python helper, **`scripts/mushroom_flame.py`**,
+  which owns the BLE link and animates the fire. The flame is *host-driven*: a
+  continuous ~5 Hz stream of colour frames (the controller has no built-in fire
+  effect). Measured cost: ~0.2% CPU, ~25 MB — it sleeps between frames and never
+  touches the projector's PixiJS/particle pipeline (that's the browser's GPU).
+- Hard-won controller quirks (see the helper's comments): FFF3 is
+  **write-without-response only** (an acknowledged write is rejected
+  `NotPermitted`); under a fast colour stream it powers its output down, so the
+  helper **re-asserts the On frame every 4 s**; keep the Pi within **~1 m** or
+  its advert isn't heard. BLE allows **one central at a time** — while the lamp
+  is on, the phone app / other tools can't use the light.
+- **Degrades safely:** if `python3-bleak` is missing or the light is out of
+  range, the helper exits and the GM toggle shows "⚠ No light found"; the game
+  server is unaffected. `INSTALL.sh` installs `python3-bleak`. Standalone BLE
+  tooling lives on the Desktop (`led_tester`, `led_dance`).
+
 ## 11. Reminders for the implementer
 - Fail loud. No `|| []`, no `?? default`. Throw. Blessed empty defaults: `flavor`, `hidden_desire`, `gear`, `notes` only.
 - Server is the source of truth; clients request, server validates + broadcasts.

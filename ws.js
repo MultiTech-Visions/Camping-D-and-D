@@ -9,7 +9,8 @@
 // snapshots to players connected on port 3000.
 
 const { WebSocketServer } = require('ws');
-const { load, ops, snapshotFor, registerDevice } = require('./state');
+const { load, ops, snapshotFor, registerDevice, setBroadcaster } = require('./state');
+const mushroom = require('./mushroom');
 
 const allClients = new Set();
 let stateLoaded = false;
@@ -28,6 +29,10 @@ function broadcastSnapshots() {
 
 function attach(httpServer, log) {
   if (!stateLoaded) { load(); stateLoaded = true; }
+  // Let async mushroom-hardware status changes push fresh snapshots, and send
+  // the helper's output to the server log.
+  setBroadcaster(broadcastSnapshots);
+  mushroom.setLogger(log);
   const wss = new WebSocketServer({ server: httpServer });
 
   wss.on('connection', (sock, req) => {
