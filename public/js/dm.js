@@ -463,14 +463,17 @@
     const m = Object.assign({ on: false, status: 'off', detail: '' }, snap.mushroom || {});
     const mLabel = !m.on ? '🔥 Light the flame'
       : m.status === 'on' ? '✓ Flame burning — tap to stop'
-      : m.status === 'error' ? '⚠ No light found — tap to stop'
+      : m.status === 'error' ? '⚠ Trouble — tap to stop'
+      : m.status === 'searching' ? '🔍 Finding the light… — tap to stop'
       : '… lighting';
     const mRow = el(`<div class="btn-row" style="align-items:center"></div>`);
     const mBtn = el(`<button class="mini ${m.on ? 'primary' : 'ghost'}">${mLabel}</button>`);
     mBtn.onclick = () => conn.action('mushroom.set', { on: !m.on });
     mRow.appendChild(mBtn);
-    if (m.on && m.status === 'error' && m.detail) {
-      mRow.appendChild(el(`<span class="small" style="color:var(--ember)">${esc(m.detail)}</span>`));
+    // Live detail while it's on but not yet burning (searching / recovering / error).
+    if (m.on && m.status !== 'on' && m.detail) {
+      const warn = m.status === 'error';
+      mRow.appendChild(el(`<span class="small" style="color:${warn ? 'var(--ember)' : 'var(--muted, #999)'}">${esc(m.detail)}</span>`));
     }
     box.appendChild(mRow);
 

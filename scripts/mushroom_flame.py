@@ -128,6 +128,29 @@ async def _sleep_or_stop(seconds):
         pass
 
 
+async def _reset_adapter():
+    """Power-cycle the Bluetooth adapter to recover a wedged stack.
+
+    The Pi's BLE adapter can stop hearing advertisements after a lot of
+    connect/disconnect churn — scans start finding fewer and fewer devices.
+    A 'bluetoothctl power off/on' clears it (verified). Best-effort: under a
+    locked-down service this may lack permission, in which case we just keep
+    retrying the plain scan — no harm done."""
+    print("flame: bluetooth reset (recovering adapter)", flush=True)
+    for args in (["power", "off"], ["power", "on"]):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bluetoothctl", *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except Exception as exc:
+            print(f"flame: adapter reset unavailable ({exc!r})", flush=True)
+            return
+        await _sleep_or_stop(2.0)
+
+
 async def main():
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -137,15 +160,23 @@ async def main():
             pass
 
     backoff = 1.0
+    not_found_streak = 0
     while not _stop.is_set():
         try:
             dev = await BleakScanner.find_device_by_address(ADDRESS, timeout=8.0)
             if dev is None:
-                print("flame: light not found (in range? powered?) — retrying",
+                not_found_streak += 1
+                # 'searching' is the keyword the server watches to show live
+                # status instead of a frozen "lighting…".
+                print("flame: searching — light not found (powered? within ~1m?)",
                       flush=True)
+                # Self-heal a wedged adapter after a few misses, then keep trying.
+                if not_found_streak % 3 == 0:
+                    await _reset_adapter()
                 await _sleep_or_stop(backoff)
                 backoff = min(backoff * 1.6, 8.0)
                 continue
+            not_found_streak = 0
             async with BleakClient(dev, timeout=20.0) as client:
                 print("flame: connected", flush=True)
                 backoff = 1.0
