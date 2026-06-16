@@ -8,6 +8,11 @@ module.exports = {
   PORT: 3000,
   GM_PORT: 3001,
 
+  // --- Mushroom lamp (BLE) — the projector stand glows like a campfire when
+  //     the GM toggles it on. MAC of the Magic Lantern controller (found
+  //     2026-06-15, name MELK-OA21). Keep the Pi within ~1m of it. ---
+  MUSHROOM_ADDRESS: 'BE:28:55:00:10:24',
+
   // --- Campsite WiFi hotspot (START.sh turns it on when no WiFi is around;
   //     the /status screen shows a join-QR for it) ---
   HOTSPOT: {

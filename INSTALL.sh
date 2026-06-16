@@ -59,6 +59,12 @@ if ! command -v make >/dev/null || ! command -v g++ >/dev/null; then
   sudo apt-get install -y build-essential python3 || warn "build tools install failed — npm install may still work via prebuilt binaries"
 fi
 
+# --- 2b. Mushroom lamp (optional BLE campfire light on the projector stand) ---
+# python3-bleak drives the light. If this fails the app is unaffected; the GM's
+# mushroom toggle just reports "no light found" until it's installed.
+say "Installing Bluetooth LED support for the mushroom lamp (python3-bleak)…"
+sudo apt-get install -y python3-bleak || warn "python3-bleak install failed — the mushroom lamp toggle will report 'no light' until it's installed (sudo apt install python3-bleak)"
+
 # --- 3. App dependencies (ON this machine — never copied from another) --------
 say "Installing app dependencies (npm install)…"
 npm install --no-audit --no-fund || fail "npm install failed — see the log above. Common fix: make sure the Pi is online, then run INSTALL.sh again."

@@ -7,6 +7,20 @@
 const { db, stmts } = require('./db');
 const config = require('./config');
 const R = require('./rules');
+const mushroom = require('./mushroom');
+
+// Broadcast hook, wired by ws.js. Lets async hardware-status changes (the
+// mushroom helper connecting / dying) push fresh snapshots to clients without
+// state.js depending on ws.js. No-op until ws.js registers the real one.
+let broadcast = () => {};
+function setBroadcaster(fn) { broadcast = fn; }
+
+// Mirror the mushroom controller's status into state and re-broadcast whenever
+// it changes asynchronously (helper connects, light drops out of range, etc.).
+mushroom.onChange((snap) => {
+  state.mushroom = snap;
+  broadcast();
+});
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -63,6 +77,10 @@ const state = {
   // it and lifts it above the dimmed rest; null = no focus. Memory-only; cleared
   // on a fresh reveal.
   reveal_focus: null,
+  // Mushroom lamp (BLE campfire on the projector stand). Memory-only hardware
+  // status, mirrored from mushroom.js; defaults off on boot (a restart never
+  // surprises the camp by lighting the lamp on its own). { on, status, detail }.
+  mushroom: mushroom.snapshot(),
   game: null,
 };
 
@@ -830,6 +848,15 @@ const ops = {
     stmts.updateGame.run(state.game);
   },
 
+  // Mushroom lamp on/off. Memory-only (hardware state, not persisted): spawns /
+  // kills the BLE flame helper via mushroom.js. The controller's async onChange
+  // keeps state.mushroom current as the helper connects or drops.
+  'mushroom.set'(p) {
+    R.assert(typeof p.on === 'boolean', 'mushroom.set: on must be true or false');
+    mushroom.setOn(p.on);
+    state.mushroom = mushroom.snapshot();
+  },
+
   // --- Phase 3: map / tokens / camera ---------------------------------------
 
   // After HTTP upload (§6), the GM calibrates: cell_size + offsets in IMAGE
@@ -1515,6 +1542,9 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
     // per-card on card.show_link; these two are transient runtime state).
     reveal_scroll_paused: !!state.reveal_scroll_paused,
     reveal_focus: state.reveal_focus ? { section: state.reveal_focus.section, entry: state.reveal_focus.entry } : null,
+    // Mushroom lamp status for the GM toggle (every role gets it; only the GM
+    // screen renders a control).
+    mushroom: { on: !!state.mushroom.on, status: state.mushroom.status, detail: state.mushroom.detail || '' },
     initiative: {
       // dm_only entries (GM reminders, hidden threats) never reach players or
       // the projector — filtered server-side like dm_only clocks. Entry
@@ -1598,4 +1628,4 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
   };
 }
 
-module.exports = { state, load, ops, snapshotFor, registerDevice };
+module.exports = { state, load, ops, snapshotFor, registerDevice, setBroadcaster };
