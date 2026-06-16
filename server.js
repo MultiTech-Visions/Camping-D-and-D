@@ -14,6 +14,7 @@ const http = require('http');
 const express = require('express');
 const config = require('./config');
 const ws = require('./ws');
+const assistant = require('./assistant');
 
 // --- logging -----------------------------------------------------------------
 const LOG_DIR = path.join(__dirname, 'logs');
@@ -85,6 +86,7 @@ gmApp.get('/dm', page('dm.html'));
 gmApp.get('/display', page('display.html'));
 gmApp.get('/learn', page('learn.html'));
 gmApp.get('/status', page('status.html'));
+gmApp.get('/assist', page('assist.html')); // prep-time AI campaign assistant (GM only, needs internet)
 
 // Token art upload: also available on the GM port so the GM can upload token art
 // from port 3001 without needing to switch to the player port.
@@ -129,6 +131,11 @@ const gmServer = http.createServer(gmApp);
 // on port 3001 immediately pushes snapshots to players on port 3000.
 ws.attach(playerServer, log);
 const wssGM = ws.attach(gmServer, log);
+
+// Prep-time AI campaign assistant: mounts /assist/session, /assist/tool,
+// /assist/chat on the GM port. Tool writes reuse the live snapshot broadcast so
+// content shows up on /dm and /display instantly.
+assistant.mount(gmApp, { broadcast: ws.broadcastSnapshots, log });
 
 // Live system info for the /status screen.
 gmApp.get('/status.json', (req, res) => {

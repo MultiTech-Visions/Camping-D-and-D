@@ -99,6 +99,25 @@ only shows its own characters, and the GM's **Devices** panel lists every device
 or offline — with the characters linked to each, so you can rename, forget, link, or
 unlink a hero from a phone without anyone retyping anything.
 
+## 🪄 Campaign assistant (prep at home, needs internet)
+
+Before a trip — while the Pi still has internet — open **`/assist`** on the GM port
+(there's a link in the GM screen's nav and on the system window) to talk through your
+campaign with an AI helper. Describe what you want ("a smuggler NPC who runs the docks,
+the tavern they drink in, and an opening story beat") and it **fleshes out the details
+for you**: it writes NPC / location / story reveal cards, generates portrait and scene
+art, and drafts vivid section text — all saved straight into your campaign so it's there
+offline at the campsite. Everything it makes appears live on the GM screen as it works.
+
+You can **talk to it** (🎙 Start talking — realtime voice over WebRTC) or **type** to it.
+It's purely a preparation tool; at the campsite the Pi runs offline as always and this
+page simply won't connect.
+
+**One-time setup** — give it an OpenAI API key (the key stays on the Pi; phones never see
+it). Either set the `OPENAI_API_KEY` environment variable, or simply drop the key into a
+plain text file at **`data/openai.key`** (the `data/` folder is private and never touched
+by updates), then restart the server. The models, voice, and image size are tunable in
+`config.js` under `ASSISTANT` — if OpenAI renames a model and a call fails, update it there.
 ## 🍄 Mushroom lamp (campfire ambiance)
 
 The projector sits on a glowing "mushroom" stand — an off-the-shelf Bluetooth LED
@@ -176,6 +195,8 @@ rules.js         pure rule helpers (diceForRank — THE rank→dice mapping)
 db.js            better-sqlite3 schema + prepared statements (card, device, token tables…)
 state.js         in-memory canonical state, all ops, role-scoped snapshots
 ws.js            websocket plumbing: hello/snapshot/action/error; shared client pool + device presence
+assistant.js     prep-time AI campaign assistant (GM port): realtime-voice token mint,
+                 shared tool executor over state.ops, image generation — internet only
 public/          the pages + shared js (ws-client, dice/clock renderers,
                  npc-reveal.js + npc-fx.js drive the reveal cards & particles)
 *.sh             the double-click toolkit (INSTALL/START/STOP/UPDATE — all tee

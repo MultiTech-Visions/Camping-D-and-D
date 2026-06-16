@@ -34,6 +34,20 @@ module.exports = {
   // --- Game systems a character can belong to ---
   SYSTEMS: ['campfire', 'dnd5e'],
 
+  // --- Campaign AI assistant (prep-time only; needs internet, so it lives on
+  //     the GM side and is used at home before a trip). The OpenAI API key is
+  //     read at request time from OPENAI_API_KEY or data/openai.key — never the
+  //     browser. Model/voice names drift; if a call 400s, update them here to
+  //     whatever OpenAI currently documents.) ---
+  ASSISTANT: {
+    REALTIME_MODEL: 'gpt-realtime',     // voice model for the WebRTC session
+    REALTIME_VOICE: 'marin',            // 'marin' | 'cedar' | 'alloy' | 'echo' | ...
+    TEXT_MODEL: 'gpt-4.1',              // text-chat agent loop
+    IMAGE_MODEL: 'gpt-image-1',         // image generation
+    IMAGE_SIZE: '1024x1024',            // '1024x1024' | '1536x1024' | '1024x1536'
+    MAX_TOOL_TURNS: 8,                  // cap the text agent loop so it can't spin forever
+  },
+
   // --- Reveal cards: prepared NPCs, locations, and story beats share one
   //     full-screen reveal mechanism (images + toggleable text sections) ---
   CARD_KINDS: ['npc', 'location', 'story'],
