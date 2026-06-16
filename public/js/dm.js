@@ -2684,15 +2684,34 @@
       const absorb = el(`<button class="mini">🛡 Con absorb</button>`);
       absorb.disabled = c.effective.constitution <= 0;
       absorb.onclick = () => conn.action('character.absorb_with_con', { char_id: c.id });
-      const blueMinus = el(`<button class="mini ghost">−🔷</button>`);
-      blueMinus.disabled = c.granted_blue <= 0;
-      blueMinus.onclick = () => conn.action('character.grant_blue', { char_id: c.id, amount: -1 });
-      const bluePlus = el(`<button class="mini">+🔷 blue (${c.granted_blue})</button>`);
-      bluePlus.onclick = () => conn.action('character.grant_blue', { char_id: c.id, amount: 1 });
+      const bluePlus = el(`<button class="mini">+🔷 blue (${c.blue_dice.length})</button>`);
+      bluePlus.onclick = () => {
+        const note = prompt('Grant a Boost die — what did they earn it for?');
+        if (note !== null && note.trim().length > 0) {
+          conn.action('character.add_blue', { char_id: c.id, note: note.trim() });
+        }
+      };
       const refillOne = el(`<button class="mini ghost" title="refill just this character">refill</button>`);
       refillOne.onclick = () => conn.action('character.end_encounter_refill', { char_id: c.id });
-      ctl.append(absorb, bluePlus, blueMinus, refillOne);
+      ctl.append(absorb, bluePlus, refillOne);
       card.appendChild(ctl);
+      // Banked Boost dice with their origin notes. The GM can spend one (e.g.
+      // when a player cashes it in at the table) by clicking it.
+      if (c.blue_dice.length > 0) {
+        const blueList = el(`<div class="small" style="margin-top:4px"></div>`);
+        for (const die of c.blue_dice) {
+          const row = el(`<div style="display:flex;gap:6px;align-items:center;margin:2px 0"></div>`);
+          const spend = el(`<button class="mini ghost" title="Spend this die">🔷✕</button>`);
+          spend.onclick = () => {
+            if (confirm(`Spend ${c.name}'s Boost die?\n\n"${die.note}"`)) {
+              conn.action('character.spend_blue', { char_id: c.id, die_id: die.id });
+            }
+          };
+          row.append(spend, el(`<span class="muted">${esc(die.note)}</span>`));
+          blueList.appendChild(row);
+        }
+        card.appendChild(blueList);
+      }
       card.appendChild(el(`<p class="muted small">encounters: ${c.encounters_done}${c.pending_points > 0 ? ` · <strong style="color:var(--gold)">⭐ ${c.pending_points} point(s) to place</strong>` : ''}</p>`));
     } else {
       const s = c.dnd_sheet;

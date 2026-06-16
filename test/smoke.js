@@ -148,19 +148,31 @@ check('drain + absorb + yellows-strip-via-rank', () => {
   throws(() => ops['character.set_drain']({ char_id: wizardId, attr: 'brawn', amount: 1 })); // not campfire
 });
 
-check('blue dice grant/spend, never negative', () => {
-  ops['character.grant_blue']({ char_id: heroId, amount: 2 });
-  ops['character.grant_blue']({ char_id: heroId, amount: -1 });
-  assert.strictEqual(state.characters.get(heroId).granted_blue, 1);
-  throws(() => ops['character.grant_blue']({ char_id: heroId, amount: -5 }));
+check('blue dice: noted entries, add/edit/spend by id', () => {
+  const c = state.characters.get(heroId);
+  ops['character.add_blue']({ char_id: heroId, note: 'saved the village from the flood' });
+  ops['character.add_blue']({ char_id: heroId, note: 'outwitted the river spirit' });
+  assert.strictEqual(c.blue_dice.length, 2);
+  assert.strictEqual(c.blue_dice[0].note, 'saved the village from the flood');
+  throws(() => ops['character.add_blue']({ char_id: heroId, note: '   ' })); // note required
+  throws(() => ops['character.add_blue']({ char_id: heroId })); // note required
+  const firstId = c.blue_dice[0].id;
+  ops['character.edit_blue_note']({ char_id: heroId, die_id: firstId, note: 'saved the WHOLE village' });
+  assert.strictEqual(c.blue_dice[0].note, 'saved the WHOLE village');
+  ops['character.spend_blue']({ char_id: heroId, die_id: firstId });
+  assert.strictEqual(c.blue_dice.length, 1);
+  assert.strictEqual(c.blue_dice[0].note, 'outwitted the river spirit');
+  throws(() => ops['character.spend_blue']({ char_id: heroId, die_id: firstId })); // already gone
 });
 
-check('end-encounter refill + progression every N', () => {
+check('end-encounter refill clears drain but BANKS blue dice', () => {
   const c = state.characters.get(heroId);
   const n = state.game.reward_every_n_encounters;
+  const bankedBefore = c.blue_dice.length;
+  assert.ok(bankedBefore > 0, 'expected a banked die going into refill');
   for (let i = 0; i < n; i++) ops['character.end_encounter_refill']({});
   assert.strictEqual(c.drain.brawn, 0);
-  assert.strictEqual(c.granted_blue, 0);
+  assert.strictEqual(c.blue_dice.length, bankedBefore); // banked dice persist across encounters
   assert.strictEqual(c.encounters_done, n);
   assert.strictEqual(c.pending_points, 1);
   ops['character.spend_point']({ char_id: heroId, attr: 'magic' });
