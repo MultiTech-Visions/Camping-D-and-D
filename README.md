@@ -99,6 +99,32 @@ only shows its own characters, and the GM's **Devices** panel lists every device
 or offline — with the characters linked to each, so you can rename, forget, link, or
 unlink a hero from a phone without anyone retyping anything.
 
+## 🍄 Mushroom lamp (campfire ambiance)
+
+The projector sits on a glowing "mushroom" stand — an off-the-shelf Bluetooth LED
+light that the app can make **flicker like a campfire**. Lovely ambiance on a night
+with no real fire going.
+
+**Turn it on:** GM screen → **⚙ Settings → 🍄 Mushroom lamp → "Light the flame."**
+Tap again to put it out. The button tells you what's happening: *Finding the
+light…*, *Flame burning*, or a clear warning if it can't reach the light.
+
+**The hardware — what to buy:** it's just a consumer **RGBIC LED strip/light kit with
+Bluetooth** (the kind controlled by a phone app and a little RF remote). This one pairs
+with the **"Magic Lantern"** Android app. Any light from that same family should work —
+look for one whose app talks over Bluetooth (not only WiFi).
+
+> 🛒 **The exact set we use:** _(Amazon link — add yours here)_
+
+**Tips:**
+- Keep the **Pi within about 1 meter** of the light's controller — the Pi's built-in
+  Bluetooth is weak and won't hear it from across a tent.
+- Only **one device at a time** can control the light over Bluetooth, so close the
+  light's phone app while the campfire is running.
+- It's **self-healing**: if the light drops out or the Bluetooth gets cranky, the app
+  keeps retrying and even resets the Bluetooth on its own — just give it a few seconds.
+- The campfire is **optional**; if no light is connected, nothing else is affected.
+
 ## 📜 Logs (when something looks weird)
 
 Every run of every script writes a timestamped log into the **`logs/`** folder, so a
@@ -122,6 +148,10 @@ Open them by double-clicking — they're plain text.
   The app *fails loud on purpose* — a clear error beats silent corruption.
 - **Update broke something** → updates refuse to finish unless the built-in self-test
   passes, and your campaign data (`data/` folder) is never touched by updates.
+- **Mushroom lamp won't light** ("Finding the light…" for a while) → move the Pi closer
+  (within ~1 m), make sure the light has power, and close its phone app. It auto-resets
+  the Bluetooth after a few tries, so give it ~30 seconds. If it says the Bluetooth
+  library is missing, run Install again (it adds `python3-bleak`).
 
 ## 🧱 For developers
 
