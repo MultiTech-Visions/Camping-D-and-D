@@ -471,6 +471,13 @@ function assertTokenArt(value, name) {
   return value;
 }
 
+// Clock note: freeform GM bookkeeping, capped so the DB can't balloon.
+function assertClockNote(value) {
+  R.assertString(value, 'note');
+  R.assert(value.length <= 2000, 'note is too long (keep it under 2000 characters)');
+  return value;
+}
+
 function assertHexColor(value, name) {
   R.assert(typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value),
     `${name} must be a '#rrggbb' color, got ${JSON.stringify(value)}`);
@@ -872,11 +879,21 @@ const ops = {
       kind: R.assertOneOf(p.kind, config.CLOCK_KINDS, 'kind'),
       visibility: R.assertOneOf(p.visibility, config.CLOCK_VISIBILITIES, 'visibility'),
       token_id: p.token_id === undefined ? null : R.assertInt(p.token_id, 'token_id'),
+      note: assertClockNote(p.note === undefined ? '' : p.note),
     };
     const info = stmts.insertClock.run(row);
     const id = Number(info.lastInsertRowid);
     state.clocks.set(id, { ...row, id });
     return { created_clock_id: id };
+  },
+
+  // The GM's long-term note on a clock — where it came from, what it's for,
+  // anything worth remembering. GM-only bookkeeping; never reaches players or
+  // the projector (stripped in the role-scoped snapshots).
+  'clock.set_note'(p) {
+    const c = getClock(p.clock_id);
+    c.note = assertClockNote(p.note === undefined ? '' : p.note);
+    stmts.updateClock.run(c);
   },
 
   'clock.set_filled'(p) {
@@ -1669,18 +1686,20 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
     return {
       ...base,
       characters: playerChars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
-      clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+      // note is GM-only bookkeeping — strip it from player snapshots
+      clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
       device_name: deviceId ? ((state.devices.get(deviceId) || {}).name || '') : '',
       revealed_card: publicRevealedCard(),
       // shared party knowledge — visited locations + met NPCs, browsable any time
       known_cards: knownCards(),
     };
   }
-  // display: roster + visible clocks only; never hidden desires, never dm_only clocks.
+  // display: roster + visible clocks only; never hidden desires, never dm_only
+  // clocks, never the GM's private clock notes.
   return {
     ...base,
     characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false, includeSecretConditions: false })),
-    clocks: clocks.filter((c) => c.visibility === 'visible').map((c) => ({ ...c })),
+    clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
     revealed_card: publicRevealedCard(),
   };
 }

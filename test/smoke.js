@@ -266,15 +266,34 @@ check('clocks create/fill/visibility, bounds enforced', () => {
   throws(() => ops['clock.create']({ label: 'bad', segments: 5, kind: 'progress', visibility: 'visible' }));
 });
 
-check('role scoping: hidden desires + dm_only clocks never leak', () => {
+check('clock notes: create with a note, set/clear, length-capped', () => {
+  const id = ops['clock.create']({
+    label: 'The duke remembers', segments: 4, kind: 'danger', visibility: 'visible',
+    note: 'originated session 3 when they insulted him at the feast',
+  }).created_clock_id;
+  assert.strictEqual(state.clocks.get(id).note, 'originated session 3 when they insulted him at the feast');
+  ops['clock.set_note']({ clock_id: id, note: 'updated: he hired assassins' });
+  assert.strictEqual(state.clocks.get(id).note, 'updated: he hired assassins');
+  ops['clock.set_note']({ clock_id: id }); // omitted note clears it
+  assert.strictEqual(state.clocks.get(id).note, '');
+  throws(() => ops['clock.set_note']({ clock_id: id, note: 'x'.repeat(2001) })); // capped
+  ops['clock.delete']({ clock_id: id });
+});
+
+check('role scoping: hidden desires + dm_only clocks + clock notes never leak', () => {
+  // give the visible clock a GM-only note to prove it never reaches players/display
+  ops['clock.set_note']({ clock_id: clockId, note: 'GM eyes only: this is the warlord arriving' });
+
   const dm = snapshotFor('dm', null);
   assert.ok(dm.characters.find((c) => c.id === heroId).hidden_desire === 'wants the crown');
   assert.ok(dm.clocks.some((c) => c.id === secretId));
+  assert.strictEqual(dm.clocks.find((c) => c.id === clockId).note, 'GM eyes only: this is the warlord arriving');
 
   const otherPlayer = snapshotFor('player', wizardId, DEV);
   const heroSeen = otherPlayer.characters.find((c) => c.id === heroId);
   assert.strictEqual(heroSeen.hidden_desire, undefined, 'another player saw a hidden desire!');
   assert.ok(!otherPlayer.clocks.some((c) => c.id === secretId), 'a player saw a dm_only clock!');
+  assert.strictEqual(otherPlayer.clocks.find((c) => c.id === clockId).note, undefined, 'a player saw a GM clock note!');
 
   const ownPlayer = snapshotFor('player', heroId, DEV);
   assert.strictEqual(ownPlayer.characters.find((c) => c.id === heroId).hidden_desire, 'wants the crown');
@@ -282,6 +301,7 @@ check('role scoping: hidden desires + dm_only clocks never leak', () => {
   const display = snapshotFor('display', null);
   assert.ok(display.characters.every((c) => c.hidden_desire === undefined));
   assert.ok(!display.clocks.some((c) => c.id === secretId));
+  assert.ok(display.clocks.every((c) => c.note === undefined), 'the wall showed a GM clock note!');
 });
 
 check('reward rate live-tunable', () => {

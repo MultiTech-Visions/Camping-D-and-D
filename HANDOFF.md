@@ -218,6 +218,10 @@ filled      INTEGER NOT NULL      # 0..segments; throw if out of range
 kind        TEXT NOT NULL         # 'progress' | 'danger'
 visibility  TEXT NOT NULL         # 'visible' | 'dm_only'
 token_id    INTEGER               # nullable optional attachment
+note        TEXT NOT NULL DEFAULT ''  # GM-only long-term bookkeeping (origin,
+                                  #   purpose, reminders). Even on a 'visible'
+                                  #   clock the note is GM-only — stripped from
+                                  #   player + display snapshots.
 ```
 
 ### `token` (map only — Phase 3+)
@@ -267,14 +271,14 @@ Character/play:
 - `character.end_encounter_refill` `{char_id?}` — refill all drain (all chars if no id); increment `encounters_done`; apply progression: when `encounters_done % reward_every_n_encounters == 0`, the character is owed +1 attribute point (surface a prompt/marker for the player to place it, capped at rank 5). **Banked blue dice persist across encounters** — they are not cleared here.
 Conditions: `condition.add` `{char_id, kind}` / `condition.remove` `{condition_id}`.
 Initiative: `initiative.add`/`initiative.remove` `{char_id}`, `initiative.reorder` `{ordered_char_ids}`, `initiative.set_turn` `{char_id}`.
-Clocks: `clock.create` `{label, segments, kind, visibility, token_id?}`, `clock.set_filled` `{clock_id, filled}` (validate 0..segments), `clock.set_visibility` `{clock_id, visibility}` (the reveal), `clock.delete` `{clock_id}`.
+Clocks: `clock.create` `{label, segments, kind, visibility, token_id?, note?}`, `clock.set_filled` `{clock_id, filled}` (validate 0..segments), `clock.set_visibility` `{clock_id, visibility}` (the reveal), `clock.set_note` `{clock_id, note}` (GM-only long-term note; omit/empty to clear), `clock.delete` `{clock_id}`.
 Map/camera (Phase 3+): `map.upload` (HTTP, §6) then `map.calibrate` `{image_path, cell_size, offset_x, offset_y}`, `map.set_active`, `token.create`/`token.move` `{token_id, col, row}`/`token.delete`, `camera.update` `{center_x, center_y, zoom, rotation}`.
 Game: `game.set_reward_rate` `{reward_every_n_encounters}` — live tuning.
 
 ### State scoping (enforce server-side; do not send-then-hide)
-- **player:** all characters' public fields, all `visible` clocks, conditions, initiative, camera. Receives its OWN `hidden_desire` but never another character's, and never `dm_only` clocks.
-- **dm:** everything, including all `hidden_desire` and all `dm_only` clocks.
-- **display:** map, tokens, `visible` clocks, roster (names/conditions/initiative), camera. Never `hidden_desire`, never `dm_only` clocks.
+- **player:** all characters' public fields, all `visible` clocks (without the GM `note`), conditions, initiative, camera. Receives its OWN `hidden_desire` but never another character's, and never `dm_only` clocks.
+- **dm:** everything, including all `hidden_desire`, all `dm_only` clocks, and all clock `note`s.
+- **display:** map, tokens, `visible` clocks, roster (names/conditions/initiative), camera. Never `hidden_desire`, never `dm_only` clocks, never clock `note`s.
 
 ---
 

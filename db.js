@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS clock (
   filled     INTEGER NOT NULL,
   kind       TEXT    NOT NULL CHECK (kind IN ('progress','danger')),
   visibility TEXT    NOT NULL CHECK (visibility IN ('visible','dm_only')),
-  token_id   INTEGER          -- nullable optional attachment (inert until Phase 3)
+  token_id   INTEGER,         -- nullable optional attachment (inert until Phase 3)
+  note       TEXT    NOT NULL DEFAULT ''  -- GM's long-term notes: origin, purpose, reminders
 );
 
 CREATE TABLE IF NOT EXISTS game (
@@ -266,6 +267,10 @@ if (db.prepare(`PRAGMA table_info(card)`).all().length > 0
     && !db.prepare(`PRAGMA table_info(card)`).all().some((c) => c.name === 'seen')) {
   db.exec(`ALTER TABLE card ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`);
 }
+// Clock notes — GM's long-term bookkeeping (origin, purpose, reminders) (added later).
+if (!db.prepare(`PRAGMA table_info(clock)`).all().some((c) => c.name === 'note')) {
+  db.exec(`ALTER TABLE clock ADD COLUMN note TEXT NOT NULL DEFAULT ''`);
+}
 
 db.prepare(`INSERT OR IGNORE INTO game (id, reward_every_n_encounters, active_map_id) VALUES (1, ?, NULL)`)
   .run(config.REWARD_EVERY_N_ENCOUNTERS_DEFAULT);
@@ -299,11 +304,11 @@ const stmts = {
   allConditions: db.prepare(`SELECT * FROM condition_row ORDER BY id`),
 
   insertClock: db.prepare(`
-    INSERT INTO clock (label, segments, filled, kind, visibility, token_id)
-    VALUES (@label, @segments, @filled, @kind, @visibility, @token_id)`),
+    INSERT INTO clock (label, segments, filled, kind, visibility, token_id, note)
+    VALUES (@label, @segments, @filled, @kind, @visibility, @token_id, @note)`),
   updateClock: db.prepare(`
     UPDATE clock SET label=@label, segments=@segments, filled=@filled, kind=@kind,
-      visibility=@visibility, token_id=@token_id WHERE id=@id`),
+      visibility=@visibility, token_id=@token_id, note=@note WHERE id=@id`),
   deleteClock: db.prepare(`DELETE FROM clock WHERE id=?`),
   allClocks: db.prepare(`SELECT * FROM clock ORDER BY id`),
 

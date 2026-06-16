@@ -587,6 +587,27 @@
     }
   }
 
+  // GM-only note editor for a clock — origin, purpose, long-term reminders.
+  // Multi-line textarea (a clock note can outlive the encounter that spawned it).
+  function editClockNote(clock) {
+    const overlay = el(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;flex-direction:column;z-index:1000;padding:16px;box-sizing:border-box"></div>`);
+    const bar = el(`<div class="btn-row" style="justify-content:space-between;align-items:center"></div>`);
+    bar.appendChild(el(`<span class="small">📝 Note — ${esc(clock.label)}</span>`));
+    const done = el(`<button class="mini primary">Done</button>`);
+    bar.appendChild(done);
+    const ta = el(`<textarea placeholder="Where this came from, what it's for, anything to remember…" maxlength="2000" style="flex:1;width:100%;margin-top:8px;box-sizing:border-box;resize:none;font:inherit;padding:8px"></textarea>`);
+    ta.value = clock.note || '';
+    overlay.append(bar, ta);
+    document.body.appendChild(overlay);
+    ta.focus();
+    done.onclick = () => {
+      if (ta.value !== (clock.note || '')) {
+        conn.action('clock.set_note', { clock_id: clock.id, note: ta.value });
+      }
+      overlay.remove();
+    };
+  }
+
   // --- clocks manager ---------------------------------------------------------
   function clocksManager() {
     const box = el(`<div class="card" id="gm-clocks"></div>`);
@@ -601,7 +622,7 @@
 
     const row = el(`<div style="display:flex;flex-wrap:wrap"></div>`);
     for (const clock of snap.clocks) {
-      const cell = el(`<div style="text-align:center"></div>`);
+      const cell = el(`<div style="text-align:center;max-width:180px"></div>`);
       cell.appendChild(CampfireDice.renderClock(clock, {
         onSegmentTap: (filled) => conn.action('clock.set_filled', { clock_id: clock.id, filled }),
       }));
@@ -611,10 +632,19 @@
         clock_id: clock.id,
         visibility: clock.visibility === 'dm_only' ? 'visible' : 'dm_only',
       });
+      const hasNote = clock.note && clock.note.trim().length > 0;
+      const noteBtn = el(`<button class="mini ${hasNote ? '' : 'ghost'}" title="GM-only note (origin, purpose, reminders)">📝${hasNote ? '' : '+'}</button>`);
+      noteBtn.onclick = () => editClockNote(clock);
       const del = el(`<button class="mini danger">✕</button>`);
       del.onclick = () => { if (confirm(`Delete clock “${clock.label}”?`)) conn.action('clock.delete', { clock_id: clock.id }); };
-      ctl.append(vis, del);
+      ctl.append(vis, noteBtn, del);
       cell.appendChild(ctl);
+      if (hasNote) {
+        const note = el(`<div class="muted small" style="white-space:pre-wrap;text-align:left;margin-top:4px;cursor:pointer" title="Tap to edit"></div>`);
+        note.textContent = clock.note;
+        note.onclick = () => editClockNote(clock);
+        cell.appendChild(note);
+      }
       row.appendChild(cell);
     }
     box.appendChild(row);
@@ -628,12 +658,19 @@
     const segs = el(`<select style="max-width:80px">${snap.config.CLOCK_SEGMENT_CHOICES.map((n) => `<option ${n === 6 ? 'selected' : ''}>${n}</option>`).join('')}</select>`);
     const kind = el(`<select style="max-width:120px"><option value="progress">progress</option><option value="danger">danger</option></select>`);
     const vis = el(`<select style="max-width:110px"><option value="visible">visible</option><option value="dm_only">secret</option></select>`);
+    const noteRow = el(`<div class="btn-row" style="margin:4px 0"></div>`);
+    const note = el(`<input type="text" placeholder="Optional GM note: origin, purpose, reminders…" style="flex:1;min-width:0" maxlength="2000">`);
+    noteRow.append(note);
     add.onclick = () => {
-      conn.action('clock.create', { label: label.value.trim(), segments: Number(segs.value), kind: kind.value, visibility: vis.value });
+      conn.action('clock.create', {
+        label: label.value.trim(), segments: Number(segs.value), kind: kind.value,
+        visibility: vis.value, note: note.value.trim(),
+      });
       label.value = '';
+      note.value = '';
     };
     optRow.append(segs, kind, vis);
-    form.append(nameRow, optRow);
+    form.append(nameRow, optRow, noteRow);
     box.appendChild(form);
     return box;
   }
