@@ -103,8 +103,8 @@
 
 <div class="toolbar">
   <div class="wrap-inner">
-    <button class="primary" id="export">⬇ Export prep pack (.json)</button>
-    <button class="ghost" id="import">⬆ Open a saved pack</button>
+    <button class="primary" id="export">⬇ Export (save to a file)</button>
+    <button class="ghost" id="import">⬆ Open a saved file</button>
     <button class="ghost" id="copytext">📋 Copy as text</button>
     <button class="ghost danger" id="reset">Start over</button>
     <input type="file" id="file" accept=".json,application/json" style="display:none">
@@ -116,34 +116,43 @@
   <header>
     <div class="flame">🔥</div>
     <h1>Story Arc Builder</h1>
-    <p class="subtitle">Sketch out a campaign — places, characters, and story beats — offline.
-      Export it as one file and hand it back to be loaded onto the table.</p>
+    <p class="subtitle">Plan out your game ahead of time — the characters, the places, and the story —
+      then send it back as one file to load into the game. No internet needed, and everything you type
+      saves right here as you go.</p>
   </header>
 
   <details class="help">
-    <summary>How this works (read me first)</summary>
+    <summary>How this works (start here)</summary>
     <ul>
-      <li><b>No internet needed.</b> Fill things in whenever you have a minute. Your work
-        autosaves in this browser, so you can close the tab and come back.</li>
-      <li>A campaign is built from <b>cards</b>. A card is one full-screen reveal at the table.
-        Three kinds: <b>Character/Monster</b> (an NPC — its first picture also becomes its battle-map token),
-        <b>Location</b> (a place the party arrives at), and <b>Story beat</b> (a narrated scene or handout).</li>
-      <li>Inside a card you add <b>chapters</b>, and inside each chapter <b>scenes</b>. The GM reveals
-        scenes one at a time during play, so write plenty of short, punchy ones.</li>
-      <li><b>Notes</b> are GM-only — players never see them. Put secrets, stat ideas, and reminders there.</li>
-      <li><b>Image requests</b> are just descriptions of art you'd like. You can't make the art here
-        (no internet) — instead describe it, and it gets generated automatically when the pack is loaded
-        at home. Be vivid: style, lighting, mood, who/what's in frame.</li>
-      <li>When you're done (or just want to send progress), tap <b>Export prep pack</b> and email or
-        share the downloaded file.</li>
+      <li><b>You don't need internet, and you can't break anything.</b> Add a little whenever you have a
+        minute — your work saves automatically in this page, so you can close it and come back later.
+        When you're happy with it, you'll send one file back to be loaded into the game.</li>
+      <li><b>You build your game out of “cards.”</b> Each card is one piece of your world — a
+        <b>Character or Monster</b>, a <b>Place</b>, or a <b>Story beat</b> (a moment in the plot). Add as
+        many as you like, in any order. Don't worry about getting it perfect; you can always come back.</li>
+      <li><b>Your storyline goes under Story beats.</b> Inside a story beat you can lay out
+        <b>chapters</b>, and inside each chapter the individual <b>scenes</b> — the moments of the story,
+        in order. This is where your story arc comes together, so jot down plenty of short scenes.</li>
+      <li><b>Everything you type is either shown to your players or kept just for you.</b> Use the
+        <b>private notes</b> for anything only you should know — secrets, reminders, ideas you're still
+        chewing on. Use the normal fields for the things you want your players to see.</li>
+      <li><b>During the game, the things you choose to show appear on a big screen</b> (a projector) for
+        everyone at the table. If there's no projector set up, your players can browse that same
+        information on their phones instead. Your private notes never appear in either place — they stay
+        with you.</li>
+      <li><b>Pictures:</b> you can't make the art here, but you can <b>describe a picture you'd like</b>
+        and it gets created automatically when your file is loaded later. Just say what's in it — who or
+        what, the mood, the setting.</li>
+      <li><b>When you're done</b> (or just want to send what you have so far), tap <b>Export</b> at the
+        top and email or share the file that downloads. That's it.</li>
     </ul>
   </details>
 
   <div class="panel">
-    <label>Campaign / arc title <span class="count" id="title-count"></span></label>
+    <label>What's your game / story called?</label>
     <input id="arc-title" maxlength="120" placeholder="e.g. The Sunken Crown">
-    <label>Notes to the GM about this arc (optional, GM-only)</label>
-    <textarea id="arc-notes" maxlength="4000" placeholder="The big picture: the threat, the stakes, how you imagine it opening and where it could go…"></textarea>
+    <label>Big-picture notes (optional — private, only you see these)</label>
+    <textarea id="arc-notes" maxlength="4000" placeholder="The overall idea: the threat, what's at stake, how you picture it starting and where it might go…"></textarea>
   </div>
 
   <h2>Cards <span class="muted small" id="card-count"></span></h2>
@@ -233,8 +242,8 @@ function imageReqList(owner, blurb) {
     });
   }
   draw();
-  const add = el('button', { class: 'tiny', onclick() { owner.image_requests.push(newImageReq()); draw(); scheduleSave(); } }, '+ Image request');
-  box.appendChild(el('div', { class: 'kicker', style: 'margin-top:8px' }, '🎨 Image requests'));
+  const add = el('button', { class: 'tiny', onclick() { owner.image_requests.push(newImageReq()); draw(); scheduleSave(); } }, '+ Add a picture');
+  box.appendChild(el('div', { class: 'kicker', style: 'margin-top:8px' }, '🎨 Pictures'));
   if (blurb) box.appendChild(el('div', { class: 'muted small', style: 'margin:2px 0 4px' }, blurb));
   box.appendChild(list);
   box.appendChild(add);
@@ -254,18 +263,18 @@ function entryEditor(section, entry, idx, redrawSection) {
 
   block.appendChild(el('label', {}, 'Scene label (optional, short)'));
   block.appendChild(bind(el('input', { maxlength: 80, placeholder: 'e.g. The door creaks open' }), entry, 'label'));
-  block.appendChild(el('label', {}, 'What happens / what the players see or hear'));
-  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: 'A vivid paragraph or two. The GM reveals this on screen.' }), entry, 'text'));
+  block.appendChild(el('label', {}, 'What happens in this scene (what your players see or hear)'));
+  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: 'A sentence or two describing this moment — the kind of thing you want to show your players.' }), entry, 'text'));
 
   const live = el('input', { type: 'checkbox' });
   live.checked = !!entry.reveal_live;
   live.addEventListener('change', () => { entry.reveal_live = live.checked; scheduleSave(); });
   const liveLabel = el('label', { style: 'display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:.9rem;margin-top:10px' }, [
-    live, document.createTextNode('Start hidden — the GM reveals this live during play'),
+    live, document.createTextNode('Keep this hidden at first — you choose when to show it during the game'),
   ]);
   block.appendChild(liveLabel);
 
-  block.appendChild(imageReqList(entry, 'Art for this scene (a panel shown while the scene is up).'));
+  block.appendChild(imageReqList(entry, 'A picture for this scene (optional).'));
   return block;
 }
 
@@ -288,7 +297,7 @@ function sectionEditor(card, section, idx, redrawCard) {
   redrawScenes();
   block.appendChild(scenes);
   block.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, '+ Scene'));
-  block.appendChild(imageReqList(section, 'Art for the chapter as a whole.'));
+  block.appendChild(imageReqList(section, 'A picture for this chapter (optional).'));
   return block;
 }
 
@@ -309,7 +318,7 @@ function cardEditor(card, idx) {
 
   const grid = el('div', { class: 'grid2' });
   const sub = el('div');
-  sub.appendChild(el('label', {}, 'Subtitle (short, shown on screen)'));
+  sub.appendChild(el('label', {}, 'Subtitle (a short line shown under the name)'));
   sub.appendChild(bind(el('input', { maxlength: 120, placeholder: 'A line of flavor' }), card, 'subtitle'));
   grid.appendChild(sub);
   const fx = el('div');
@@ -324,22 +333,26 @@ function cardEditor(card, idx) {
 
   if (card.kind === 'npc') {
     const tgrid = el('div', { class: 'grid2' });
-    const tw = el('div'); tw.appendChild(el('label', {}, 'Map token width (cells)'));
+    const tw = el('div'); tw.appendChild(el('label', {}, 'How many squares wide? (only matters if you use a grid map)'));
     tw.appendChild(bindNum(el('input', { type: 'number', min: 1, max: 50 }), card, 'token_w'));
-    const th = el('div'); th.appendChild(el('label', {}, 'Map token height (cells)'));
+    const th = el('div'); th.appendChild(el('label', {}, 'How many squares tall?'));
     th.appendChild(bindNum(el('input', { type: 'number', min: 1, max: 50 }), card, 'token_h'));
     tgrid.appendChild(tw); tgrid.appendChild(th);
     block.appendChild(tgrid);
   }
 
-  block.appendChild(el('label', {}, 'GM-only notes (players never see these)'));
-  block.appendChild(bind(el('textarea', { maxlength: 8000, placeholder: 'Secrets, stat ideas, motivations, what triggers what…' }), card, 'notes'));
+  block.appendChild(el('label', {}, 'Private notes (only you see these — never shown to players)'));
+  block.appendChild(bind(el('textarea', { maxlength: 8000, placeholder: 'Secrets, stat ideas, motivations, what sets things off…' }), card, 'notes'));
 
   block.appendChild(imageReqList(card, card.kind === 'npc'
-    ? 'A portrait is generated for the card; the first one also becomes the battle-map token.'
-    : 'Cover / establishing art for this card.'));
+    ? 'Describe a picture of this character or monster (optional).'
+    : 'Describe a picture for this card (optional).'));
 
   block.appendChild(el('h3', { style: 'margin-top:16px' }, 'Chapters & scenes'));
+  block.appendChild(el('div', { class: 'muted small', style: 'margin:-2px 0 6px' },
+    card.kind === 'story'
+      ? 'Lay out your story here — chapters, with the scenes inside them in the order they happen.'
+      : `Optional. Extra details about this ${card.kind === 'npc' ? 'character or monster' : 'place'} that you can show a little at a time.`));
   const secs = el('div');
   function redrawSecs() {
     secs.innerHTML = '';
@@ -454,7 +467,7 @@ function importPack(file) {
   reader.onload = () => {
     try {
       const d = JSON.parse(reader.result);
-      if (!d || d.format !== FORMAT) throw new Error('That doesn’t look like a Story Arc prep pack.');
+      if (!d || d.format !== FORMAT) throw new Error('That doesn’t look like a Story Arc file.');
       if (doc.cards.length && !confirm('Replace what you have open with the file you picked?')) return;
       doc = normalize(d);
       renderAll(); save();
