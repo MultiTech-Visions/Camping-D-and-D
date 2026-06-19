@@ -250,21 +250,35 @@ function imageReqList(owner, blurb) {
   return box;
 }
 
-// ---- scene (entry) editor --------------------------------------------------
-function entryEditor(section, entry, idx, redrawSection) {
+// The same underlying structure is called different things depending on the
+// card: a Story beat is told as Chapters & Scenes, while a Character or Place is
+// just organized into Sections & Entries. One data model, friendlier labels.
+function terms(kind) {
+  return kind === 'story'
+    ? { sec: 'Chapter', ent: 'Scene',
+        bodyLabel: 'What happens in this scene (what your players see or hear)',
+        bodyHint: 'A sentence or two describing this moment — the kind of thing you want to show your players.' }
+    : { sec: 'Section', ent: 'Entry',
+        bodyLabel: 'Details (what your players see or hear)',
+        bodyHint: 'A sentence or two you might show your players.' };
+}
+
+// ---- entry / scene editor --------------------------------------------------
+function entryEditor(section, entry, idx, redrawSection, t) {
+  const lower = t.ent.toLowerCase();
   const block = el('div', { class: 'entry-block' });
   const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(section.entries, idx, idx - 1); redrawSection(); scheduleSave(); } }, '↑');
   const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(section.entries, idx, idx + 1); redrawSection(); scheduleSave(); } }, '↓');
-  const kill = el('button', { class: 'tiny ghost danger', title: 'Delete scene', onclick() { section.entries.splice(idx, 1); redrawSection(); scheduleSave(); } }, '🗑');
+  const kill = el('button', { class: 'tiny ghost danger', title: `Delete ${lower}`, onclick() { section.entries.splice(idx, 1); redrawSection(); scheduleSave(); } }, '🗑');
   block.appendChild(el('div', { class: 'block-head' }, [
-    el('span', { class: 'kicker' }, `Scene ${idx + 1}`),
+    el('span', { class: 'kicker' }, `${t.ent} ${idx + 1}`),
     el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
   ]));
 
-  block.appendChild(el('label', {}, 'Scene label (optional, short)'));
+  block.appendChild(el('label', {}, `${t.ent} label (optional, short)`));
   block.appendChild(bind(el('input', { maxlength: 80, placeholder: 'e.g. The door creaks open' }), entry, 'label'));
-  block.appendChild(el('label', {}, 'What happens in this scene (what your players see or hear)'));
-  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: 'A sentence or two describing this moment — the kind of thing you want to show your players.' }), entry, 'text'));
+  block.appendChild(el('label', {}, t.bodyLabel));
+  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: t.bodyHint }), entry, 'text'));
 
   const live = el('input', { type: 'checkbox' });
   live.checked = !!entry.reveal_live;
@@ -274,30 +288,31 @@ function entryEditor(section, entry, idx, redrawSection) {
   ]);
   block.appendChild(liveLabel);
 
-  block.appendChild(imageReqList(entry, 'A picture for this scene (optional).'));
+  block.appendChild(imageReqList(entry, `A picture for this ${lower} (optional).`));
   return block;
 }
 
-// ---- chapter (section) editor ----------------------------------------------
-function sectionEditor(card, section, idx, redrawCard) {
+// ---- section / chapter editor ----------------------------------------------
+function sectionEditor(card, section, idx, redrawCard, t) {
+  const lower = t.sec.toLowerCase();
   const block = el('div', { class: 'section-block' });
-  const title = bind(el('input', { class: 'grow', maxlength: 80, placeholder: `Chapter ${idx + 1} title (optional)` }), section, 'title');
+  const title = bind(el('input', { class: 'grow', maxlength: 80, placeholder: `${t.sec} ${idx + 1} title (optional)` }), section, 'title');
   const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(card.sections, idx, idx - 1); redrawCard(); scheduleSave(); } }, '↑');
   const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(card.sections, idx, idx + 1); redrawCard(); scheduleSave(); } }, '↓');
-  const kill = el('button', { class: 'tiny ghost danger', title: 'Delete chapter', onclick() { card.sections.splice(idx, 1); redrawCard(); scheduleSave(); } }, '🗑');
+  const kill = el('button', { class: 'tiny ghost danger', title: `Delete ${lower}`, onclick() { card.sections.splice(idx, 1); redrawCard(); scheduleSave(); } }, '🗑');
   block.appendChild(el('div', { class: 'block-head' }, [
-    el('span', { class: 'kicker' }, '📑 Chapter'), title, el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
+    el('span', { class: 'kicker' }, `📑 ${t.sec}`), title, el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
   ]));
 
   const scenes = el('div');
   function redrawScenes() {
     scenes.innerHTML = '';
-    section.entries.forEach((e, i) => scenes.appendChild(entryEditor(section, e, i, redrawScenes)));
+    section.entries.forEach((e, i) => scenes.appendChild(entryEditor(section, e, i, redrawScenes, t)));
   }
   redrawScenes();
   block.appendChild(scenes);
-  block.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, '+ Scene'));
-  block.appendChild(imageReqList(section, 'A picture for this chapter (optional).'));
+  block.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, `+ ${t.ent}`));
+  block.appendChild(imageReqList(section, `A picture for this ${lower} (optional).`));
   return block;
 }
 
@@ -348,7 +363,8 @@ function cardEditor(card, idx) {
     ? 'Describe a picture of this character or monster (optional).'
     : 'Describe a picture for this card (optional).'));
 
-  block.appendChild(el('h3', { style: 'margin-top:16px' }, 'Chapters & scenes'));
+  const t = terms(card.kind);
+  block.appendChild(el('h3', { style: 'margin-top:16px' }, card.kind === 'story' ? 'Chapters & scenes' : 'Sections & entries'));
   block.appendChild(el('div', { class: 'muted small', style: 'margin:-2px 0 6px' },
     card.kind === 'story'
       ? 'Lay out your story here — chapters, with the scenes inside them in the order they happen.'
@@ -356,11 +372,11 @@ function cardEditor(card, idx) {
   const secs = el('div');
   function redrawSecs() {
     secs.innerHTML = '';
-    card.sections.forEach((s, i) => secs.appendChild(sectionEditor(card, s, i, redrawSecs)));
+    card.sections.forEach((s, i) => secs.appendChild(sectionEditor(card, s, i, redrawSecs, t)));
   }
   redrawSecs();
   block.appendChild(secs);
-  block.appendChild(el('button', { class: 'tiny', onclick() { card.sections.push(newSection()); redrawSecs(); scheduleSave(); } }, '+ Chapter'));
+  block.appendChild(el('button', { class: 'tiny', onclick() { card.sections.push(newSection()); redrawSecs(); scheduleSave(); } }, `+ ${t.sec}`));
 
   return block;
 }
