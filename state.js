@@ -157,9 +157,22 @@ function load() {
       drain: rt ? rt.drain : zeroDrain(),
       blue_dice: loadBlueDice(rt),
       conditions: [],
+      notes_records: [],
     });
   }
   for (const id of migratedSheets) persistCharacter(state.characters.get(id));
+
+  // Player notebook records, attached to their owning character (private to that
+  // character's phone — see snapshotFor). FK CASCADE keeps these from outliving
+  // a deleted character, so any orphan would be a corrupt DB.
+  for (const row of stmts.allNotes.all()) {
+    const c = state.characters.get(row.char_id);
+    R.assert(c, `corrupt DB: note ${row.id} references missing character ${row.char_id}`);
+    c.notes_records.push({
+      id: row.id, char_id: row.char_id, title: row.title, body: row.body,
+      pinned: !!row.pinned, created_at: row.created_at, updated_at: row.updated_at,
+    });
+  }
   state.entryConditions.clear();
   for (const c of stmts.allConditions.all()) {
     if (c.char_id !== null) {
@@ -478,6 +491,31 @@ function assertClockNote(value) {
   return value;
 }
 
+// Player notebook record fields. Title is a one-line label; body is the note
+// itself (generous cap for long-term journaling, still bounded so the DB can't
+// balloon).
+function assertNoteTitle(value) {
+  R.assertString(value, 'title');
+  R.assert(value.length <= 120, 'title is too long (keep it under 120 characters)');
+  return value;
+}
+function assertNoteBody(value) {
+  R.assertString(value, 'body');
+  R.assert(value.length <= 20000, 'note is too long (keep it under 20000 characters)');
+  return value;
+}
+
+// Find a notebook record by id across every character (records carry a unique
+// global id). Returns the record plus the list it lives in, for in-place edits.
+function getNoteRecord(noteId) {
+  R.assertInt(noteId, 'note_id');
+  for (const c of state.characters.values()) {
+    const rec = c.notes_records.find((r) => r.id === noteId);
+    if (rec) return { rec, list: c.notes_records };
+  }
+  throw new R.RuleError(`no note with id ${noteId}`);
+}
+
 function assertHexColor(value, name) {
   R.assert(typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value),
     `${name} must be a '#rrggbb' color, got ${JSON.stringify(value)}`);
@@ -554,7 +592,7 @@ const ops = {
     state.characters.set(id, {
       ...row, id,
       dnd_sheet: system === 'dnd5e' ? JSON.parse(row.dnd_sheet) : null,
-      drain: zeroDrain(), blue_dice: [], conditions: [],
+      drain: zeroDrain(), blue_dice: [], conditions: [], notes_records: [],
       device_id,
     });
     persistRuntime();
@@ -693,6 +731,45 @@ const ops = {
     persistRuntime();
   },
 
+  // ---- Player notebook: many titled records per character, for long-term
+  // note-taking. Private to the owning character's phone (snapshotFor only ships
+  // a player their own characters' records). Each record lives in its own
+  // note_record row, persisted immediately. Search is client-side over the
+  // records a player already holds, so no server query op is needed.
+  'note.create'(p) {
+    const c = getChar(p.char_id);
+    const title = assertNoteTitle(p.title === undefined ? '' : p.title);
+    const body = assertNoteBody(p.body === undefined ? '' : p.body);
+    R.assert(title.trim().length > 0 || body.trim().length > 0, 'a note needs a title or some text');
+    const now = new Date().toISOString();
+    const row = { char_id: c.id, title, body, pinned: 0, created_at: now, updated_at: now };
+    const info = stmts.insertNote.run(row);
+    const id = Number(info.lastInsertRowid);
+    c.notes_records.push({ id, char_id: c.id, title, body, pinned: false, created_at: now, updated_at: now });
+    return { created_note_id: id };
+  },
+
+  'note.update'(p) {
+    const { rec } = getNoteRecord(p.note_id);
+    if (p.title !== undefined) rec.title = assertNoteTitle(p.title);
+    if (p.body !== undefined) rec.body = assertNoteBody(p.body);
+    if (p.pinned !== undefined) {
+      R.assert(typeof p.pinned === 'boolean', 'pinned must be a boolean');
+      rec.pinned = p.pinned;
+    }
+    rec.updated_at = new Date().toISOString();
+    stmts.updateNote.run({
+      id: rec.id, title: rec.title, body: rec.body,
+      pinned: rec.pinned ? 1 : 0, updated_at: rec.updated_at,
+    });
+  },
+
+  'note.delete'(p) {
+    const { rec, list } = getNoteRecord(p.note_id);
+    stmts.deleteNote.run(rec.id);
+    list.splice(list.indexOf(rec), 1);
+  },
+
   // End-of-encounter refill (+ progression). All campfire characters when no
   // char_id given. Drain clears; encounters_done increments; every Nth
   // encounter banks +1 attribute point to place (capped at CEILING by
@@ -731,7 +808,7 @@ const ops = {
 
   'character.delete'(p) {
     const c = getChar(p.char_id);
-    stmts.deleteCharacter.run(c.id); // conditions + pc tokens cascade
+    stmts.deleteCharacter.run(c.id); // conditions + pc tokens + notebook cascade
     state.characters.delete(c.id);
     for (const [tid, t] of state.tokens) {
       if (t.char_id === c.id) state.tokens.delete(tid);
@@ -1553,7 +1630,7 @@ function knownCards() {
 // secrets never leave the process for the wrong role.
 // ---------------------------------------------------------------------------
 
-function publicCharacter(c, { includeHiddenDesire, includeSecretConditions, includeDeviceId }) {
+function publicCharacter(c, { includeHiddenDesire, includeSecretConditions, includeDeviceId, includeNotes }) {
   const out = {
     id: c.id, system: c.system, name: c.name, concept: c.concept,
     flavor: c.flavor, gear: c.gear, notes: c.notes, token_art: c.token_art,
@@ -1580,6 +1657,10 @@ function publicCharacter(c, { includeHiddenDesire, includeSecretConditions, incl
   }
   if (includeHiddenDesire) out.hidden_desire = c.hidden_desire;
   if (includeDeviceId) out.device_id = c.device_id || null;
+  // Notebook records ride only the owning player's snapshot — never the GM's or
+  // the projector's — keeping a player's private journal private (and snapshots
+  // for the other roles lean).
+  if (includeNotes) out.notes_records = c.notes_records.map((r) => ({ ...r }));
   return out;
 }
 
@@ -1685,7 +1766,7 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
       : [];
     return {
       ...base,
-      characters: playerChars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false })),
+      characters: playerChars.map((c) => publicCharacter(c, { includeHiddenDesire: c.id === charId, includeSecretConditions: false, includeNotes: true })),
       // note is GM-only bookkeeping — strip it from player snapshots
       clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
       device_name: deviceId ? ((state.devices.get(deviceId) || {}).name || '') : '',
