@@ -154,6 +154,20 @@ CREATE TABLE IF NOT EXISTS card (
   -- whether the reveal draws the connector line from caption text to the image
   show_link   INTEGER NOT NULL DEFAULT 1
 );
+
+-- Player notebook: many freeform records per character, each a titled note for
+-- long-term play (session recaps, clues, NPC reminders…). Private to the owning
+-- character's phone — never sent to other players, the GM, or the projector.
+-- Distinct from character.notes (the single quick-jot field on the sheet).
+CREATE TABLE IF NOT EXISTS note_record (
+  id         INTEGER PRIMARY KEY,
+  char_id    INTEGER NOT NULL REFERENCES character(id) ON DELETE CASCADE,
+  title      TEXT    NOT NULL DEFAULT '',
+  body       TEXT    NOT NULL DEFAULT '',
+  pinned     INTEGER NOT NULL DEFAULT 0,   -- pinned records sort to the top
+  created_at TEXT    NOT NULL DEFAULT '',
+  updated_at TEXT    NOT NULL DEFAULT ''
+);
 `);
 
 // One-time import of the old npc table into the unified card table (kind='npc'),
@@ -347,6 +361,13 @@ const stmts = {
     bg_image=@bg_image, bg_effect=@bg_effect, visited=@visited, seen=@seen, images_slides=@images_slides, show_link=@show_link WHERE id=@id`),
   deleteCard: db.prepare(`DELETE FROM card WHERE id=?`),
   allCards: db.prepare(`SELECT * FROM card ORDER BY id`),
+
+  insertNote: db.prepare(`
+    INSERT INTO note_record (char_id, title, body, pinned, created_at, updated_at)
+    VALUES (@char_id, @title, @body, @pinned, @created_at, @updated_at)`),
+  updateNote: db.prepare(`UPDATE note_record SET title=@title, body=@body, pinned=@pinned, updated_at=@updated_at WHERE id=@id`),
+  deleteNote: db.prepare(`DELETE FROM note_record WHERE id=?`),
+  allNotes: db.prepare(`SELECT * FROM note_record ORDER BY id`),
 
   getRuntime: db.prepare(`SELECT json FROM runtime WHERE id=1`),
   saveRuntime: db.prepare(`UPDATE runtime SET json=? WHERE id=1`),

@@ -22,6 +22,11 @@
   // saved entry's reveal is open so a live GM reveal can't stomp it.
   let knowledgeOpen = params.get('view') === 'knowledge';
   let viewingKnowledgeId = null;
+  // 📓 Notebook: this character's private journal — many titled records for
+  // long-term play, with a client-side search box. notebookQuery persists across
+  // snapshot re-renders so live updates don't clear the search field.
+  let notebookOpen = params.get('view') === 'notes';
+  let notebookQuery = '';
 
   const conn = CampfireWS.connect({
     role: 'player',
@@ -91,6 +96,7 @@
       root.appendChild(el(`<div class="banner">No character selected. <a href="/">Pick or create one</a>.</div>`));
       return;
     }
+    if (notebookOpen) return renderNotebook(me);
     if (editorScreen === 'profile') return renderProfileEdit(me);
     if (editorScreen === 'dnd-stats' && me.system === 'dnd5e') return renderDndEdit(me);
     me.system === 'campfire' ? renderCampfireTracker(me) : renderDndTracker(me);
@@ -748,6 +754,151 @@
   }
 
   // =========================================================================
+  // 📓 Notebook: this character's private journal. Many titled records for
+  // long-term note-taking, searchable. Records live server-side scoped to the
+  // character, so they survive across sessions and only ever reach this phone.
+  // =========================================================================
+  function openNotebook() {
+    notebookOpen = true;
+    history.replaceState(null, '', '/play?view=notes');
+    render();
+  }
+  function closeNotebook() {
+    notebookOpen = false;
+    history.replaceState(null, '', '/play');
+    render();
+  }
+
+  function fmtNoteDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  // A compact entry point on the sheet, so the notebook is discoverable without
+  // hunting in the nav. Shows the running record count.
+  function notebookSection(me) {
+    const n = (me.notes_records || []).length;
+    const box = el(`<div class="card"><h3>📓 Notebook</h3></div>`);
+    box.appendChild(el(`<p class="muted small">${n === 0 ? 'Keep session recaps, clues, and reminders here — as many notes as you like.' : `${n} note${n === 1 ? '' : 's'} saved. Only you can see these.`}</p>`));
+    const btn = el(`<button class="primary">${n === 0 ? '✍ Start your notebook' : '📓 Open notebook'}</button>`);
+    btn.onclick = openNotebook;
+    box.appendChild(btn);
+    return box;
+  }
+
+  function renderNotebook(me) {
+    root.innerHTML = '';
+    const head = el(`<div class="card-head"><h2 style="margin-top:6px;border:none">📓 Notebook</h2></div>`);
+    const back = el(`<button class="mini ghost" title="back to your sheet">← My sheet</button>`);
+    back.onclick = closeNotebook;
+    head.appendChild(back);
+    root.appendChild(head);
+    root.appendChild(el(`<p class="muted small">${esc(me.name)}'s private journal. Create a record for anything you want to remember — give it a title and write away. Only this phone sees these.</p>`));
+
+    const records = (me.notes_records || []).slice();
+
+    const tools = el(`<div class="card"></div>`);
+    const search = el(`<input type="text" placeholder="🔍 Search your notes…">`);
+    search.value = notebookQuery;
+    const list = el(`<div style="margin-top:10px"></div>`);
+    search.oninput = () => { notebookQuery = search.value; paintList(); };
+    tools.appendChild(search);
+    const newBtn = el(`<button class="primary" style="margin-top:8px">+ New note</button>`);
+    newBtn.onclick = () => openNoteRecordEditor(me, null);
+    tools.appendChild(newBtn);
+    root.appendChild(tools);
+    root.appendChild(list);
+
+    function paintList() {
+      list.innerHTML = '';
+      if (records.length === 0) {
+        list.appendChild(el(`<div class="banner">No notes yet. Tap “+ New note” to start your journal.</div>`));
+        return;
+      }
+      const q = notebookQuery.trim().toLowerCase();
+      let shown = q
+        ? records.filter((r) => `${r.title}\n${r.body}`.toLowerCase().includes(q))
+        : records.slice();
+      // pinned first, then most recently updated
+      shown.sort((a, b) => (b.pinned - a.pinned)
+        || String(b.updated_at).localeCompare(String(a.updated_at)));
+      if (shown.length === 0) {
+        list.appendChild(el(`<p class="muted small center">No notes match “${esc(notebookQuery)}”.</p>`));
+        return;
+      }
+      for (const r of shown) {
+        const card = el(`<div class="card" style="cursor:pointer"></div>`);
+        card.appendChild(el(`<h3 style="margin:0 0 6px;border:none">${r.pinned ? '📌 ' : ''}${esc(r.title || 'Untitled note')}</h3>`));
+        const text = (r.body || '').trim();
+        const body = el(`<div class="note-body${text ? '' : ' empty'}"></div>`);
+        body.textContent = text ? (text.length > 240 ? `${text.slice(0, 240)}…` : text) : 'No text yet — tap to add some.';
+        card.appendChild(body);
+        const when = fmtNoteDate(r.updated_at);
+        if (when) card.appendChild(el(`<div class="muted small" style="margin-top:6px">Updated ${esc(when)}</div>`));
+        card.onclick = () => openNoteRecordEditor(me, r);
+        list.appendChild(card);
+      }
+    }
+    paintList();
+  }
+
+  // Full-screen editor for a single notebook record. record === null creates a
+  // new one (saved on close only if it has a title or body). Mirrors the
+  // gear/notes editor's keyboard-friendly layout.
+  function openNoteRecordEditor(me, record) {
+    const isNew = !record;
+    const overlay = el(`<div class="note-editor"></div>`);
+    const bar = el(`<div class="note-editor-bar"></div>`);
+    bar.appendChild(el(`<span class="note-editor-title">${isNew ? 'New note' : 'Edit note'}</span>`));
+    const done = el(`<button class="primary">Done</button>`);
+    bar.appendChild(done);
+    const titleIn = el(`<input type="text" class="note-editor-input" maxlength="120" placeholder="Title">`);
+    titleIn.value = record ? record.title : '';
+    const ta = el(`<textarea class="note-editor-area" placeholder="Write your note…"></textarea>`);
+    ta.value = record ? record.body : '';
+    overlay.append(bar, titleIn, ta);
+
+    let removed = false;
+    const teardown = () => { if (!removed) { removed = true; overlay.remove(); CampfireScrollLock.unlock(); } };
+
+    // existing records get pin + delete actions in a footer bar
+    if (!isNew) {
+      const foot = el(`<div class="note-editor-foot"></div>`);
+      const pin = el(`<button class="mini ghost">${record.pinned ? '📌 Unpin' : '📌 Pin to top'}</button>`);
+      pin.onclick = () => {
+        conn.action('note.update', { note_id: record.id, title: titleIn.value, body: ta.value, pinned: !record.pinned });
+        teardown();
+      };
+      const del = el(`<button class="mini danger">🗑 Delete</button>`);
+      del.onclick = () => {
+        if (confirm('Delete this note for good?')) {
+          conn.action('note.delete', { note_id: record.id });
+          teardown();
+        }
+      };
+      foot.append(pin, del);
+      overlay.appendChild(foot);
+    }
+
+    CampfireScrollLock.lock();
+    document.body.appendChild(overlay);
+    titleIn.focus();
+
+    done.onclick = () => {
+      const title = titleIn.value;
+      const body = ta.value;
+      if (isNew) {
+        if (title.trim() || body.trim()) conn.action('note.create', { char_id: me.id, title, body });
+      } else if (title !== record.title || body !== record.body) {
+        conn.action('note.update', { note_id: record.id, title, body });
+      }
+      teardown();
+    };
+  }
+
+  // =========================================================================
   // Campfire Saga tracker
   // =========================================================================
   function renderCampfireTracker(me) {
@@ -828,6 +979,7 @@
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));
     root.appendChild(notesSection(me));
+    root.appendChild(notebookSection(me));
   }
 
   // =========================================================================
@@ -1050,6 +1202,7 @@
     root.appendChild(clocksSection());
     root.appendChild(conditionsSection(me));
     root.appendChild(notesSection(me));
+    root.appendChild(notebookSection(me));
   }
 
   function renderDndEdit(me) {

@@ -99,6 +99,17 @@ only shows its own characters, and the GM's **Devices** panel lists every device
 or offline — with the characters linked to each, so you can rename, forget, link, or
 unlink a hero from a phone without anyone retyping anything.
 
+## 📓 Player notebook
+
+Every player gets a private **notebook** on their phone (nav: **📓 Notebook**, or
+the card at the bottom of their sheet) for long-term note-taking across sessions.
+It's not one big text box — players create **as many records as they like**, each
+with its own **title** and free-text body, so session recaps, clues, NPC reminders,
+and shopping lists stay as separate, scannable entries. A **search box** filters
+across every record's title and text, and any record can be **pinned** to the top
+for quick recall. Notes are tied to the character and **never leave that phone** —
+other players, the GM, and the projector never see them.
+
 ## 🪄 Campaign assistant (prep at home, needs internet)
 
 Before a trip — while the Pi still has internet — open **`/assist`** on the GM port

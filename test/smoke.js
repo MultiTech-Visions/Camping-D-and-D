@@ -165,6 +165,40 @@ check('blue dice: noted entries, add/edit/spend by id', () => {
   throws(() => ops['character.spend_blue']({ char_id: heroId, die_id: firstId })); // already gone
 });
 
+check('player notebook: many records, edit/pin/delete, private per character', () => {
+  const { snapshotFor } = require('../state');
+  const c = state.characters.get(heroId);
+  const n1 = ops['note.create']({ char_id: heroId, title: 'Session 1', body: 'met the river spirit' }).created_note_id;
+  const n2 = ops['note.create']({ char_id: heroId, title: 'Clues', body: 'the duke fears fire' }).created_note_id;
+  assert.strictEqual(c.notes_records.length, 2);
+  throws(() => ops['note.create']({ char_id: heroId, title: '  ', body: '   ' })); // needs title or text
+  throws(() => ops['note.create']({ char_id: heroId, title: 'x'.repeat(121) }));    // title cap
+  throws(() => ops['note.create']({ char_id: heroId, body: 'x'.repeat(20001) }));   // body cap
+
+  // edit title/body + pin
+  ops['note.update']({ note_id: n1, title: 'Session 1 — the marsh', pinned: true });
+  assert.strictEqual(c.notes_records.find((r) => r.id === n1).title, 'Session 1 — the marsh');
+  assert.strictEqual(c.notes_records.find((r) => r.id === n1).pinned, true);
+  throws(() => ops['note.update']({ note_id: n1, pinned: 'yes' }));   // non-bool
+  throws(() => ops['note.update']({ note_id: 9999, body: 'x' }));     // unknown note
+
+  // the owning phone sees the notebook; a phone that doesn't own the hero never does
+  const mine = snapshotFor('player', heroId, DEV).characters.find((x) => x.id === heroId);
+  assert.strictEqual(mine.notes_records.length, 2);
+  assert.ok(!snapshotFor('player', heroId, 'dev-stranger').characters.some((x) => x.id === heroId),
+    'a notebook leaked to another phone');
+  // the GM and the projector never receive notebook records
+  assert.ok(!('notes_records' in snapshotFor('dm', null).characters.find((x) => x.id === heroId)),
+    'a notebook leaked to the GM');
+  assert.ok(snapshotFor('display', null).characters.every((x) => !('notes_records' in x)),
+    'a notebook leaked to the projector');
+
+  // delete pulls it out
+  ops['note.delete']({ note_id: n2 });
+  assert.strictEqual(c.notes_records.length, 1);
+  throws(() => ops['note.delete']({ note_id: n2 })); // already gone
+});
+
 check('end-encounter refill clears drain but BANKS blue dice', () => {
   const c = state.characters.get(heroId);
   const n = state.game.reward_every_n_encounters;
