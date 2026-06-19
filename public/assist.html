@@ -63,6 +63,19 @@
   </div>
 
   <div class="card">
+    <h2 style="margin-top:0">📦 Import a prep pack</h2>
+    <p class="muted small">Built a story arc offline in the <a href="/builder.html" download>Story Arc Builder</a>?
+      Pick the exported <code>.json</code> here to turn it into cards — every image request runs
+      through the art generator (the image queue) as it imports. Needs internet.</p>
+    <div class="btn-row">
+      <input type="file" id="import-file" accept=".json,application/json" style="display:none">
+      <button class="primary" id="import-pick">Choose a prep pack…</button>
+      <a href="/builder.html" download><button class="ghost">⬇ Download the builder to send to a co-GM</button></a>
+    </div>
+    <div class="activity" id="import-log" style="margin-top:10px"><p class="muted">Import progress (cards + the image queue) shows here.</p></div>
+  </div>
+
+  <div class="card">
     <h2 style="margin-top:0">🛠 What it built this session</h2>
     <div class="activity" id="activity"><p class="muted">Tool actions (cards, images, characters…) appear here as they happen.</p></div>
   </div>
