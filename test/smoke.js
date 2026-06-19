@@ -795,5 +795,61 @@ check('tokens are scoped to their map; switching maps swaps the token set', () =
   ops['map.delete']({ map_id: mapB });
 });
 
-console.log(`\nAll ${passed} checks passed. The fire burns true. 🔥`);
-fs.rmSync(tmp, { recursive: true, force: true });
+// --- prep-pack import (builder.html → /assist/import) ----------------------
+// These two are async (importPack returns a promise), so they run through a
+// small async runner below instead of the synchronous check() above.
+async function acheck(name, fn) {
+  try { await fn(); passed++; console.log(`  ✔ ${name}`); }
+  catch (err) { console.error(`  ✖ ${name}\n    ${err.message}`); process.exitCode = 1; throw err; }
+}
+
+async function asyncChecks() {
+await acheck('prep pack import: builds cards/chapters/scenes, reveal_live → hidden', async () => {
+  const { importPack } = require('../assistant');
+  const before = state.cards.size;
+  const progress = [];
+  const summary = await importPack({
+    format: 'campfire-saga-pack', version: 1, title: 'The Sunken Crown',
+    cards: [
+      { kind: 'story', name: 'Ambush at the Ford', subtitle: 'blades in the reeds',
+        notes: 'the bandits flee at half strength', bg_effect: 'rain',
+        sections: [{ title: 'Opening', entries: [
+          { label: 'The whistle', text: 'an arrow thuds into the mast', reveal_live: false },
+          { label: 'The trap', text: 'nets rise from the water', reveal_live: true },
+        ] }] },
+      { kind: 'npc', name: 'Reed-Witch', token_w: 2, token_h: 2 },
+    ],
+  }, { broadcast() {}, onProgress: (p) => progress.push(p) });
+
+  assert.strictEqual(summary.cards_created, 2);
+  assert.strictEqual(summary.images_made, 0); // no image requests → no network
+  assert.strictEqual(state.cards.size, before + 2);
+  const story = [...state.cards.values()].find((c) => c.name === 'Ambush at the Ford');
+  assert.strictEqual(story.kind, 'story');
+  assert.strictEqual(story.bg_effect, 'rain');
+  assert.strictEqual(story.sections[0].title, 'Opening');
+  // reveal_live:false starts shown; reveal_live:true (or omitted) starts hidden
+  assert.strictEqual(story.sections[0].entries[0].visible, true);
+  assert.strictEqual(story.sections[0].entries[1].visible, false);
+  const witch = [...state.cards.values()].find((c) => c.name === 'Reed-Witch');
+  assert.strictEqual(witch.token_w, 2);
+  // cleanup so later size-based assertions (if any) stay honest
+  ops['card.delete']({ card_id: story.id });
+  ops['card.delete']({ card_id: witch.id });
+});
+
+await acheck('prep pack import: rejects a file that is not a pack', async () => {
+  const { importPack } = require('../assistant');
+  let threw = false;
+  try { await importPack({ hello: 'world' }, { broadcast() {} }); } catch { threw = true; }
+  assert.ok(threw, 'importing a non-pack object should fail loud');
+});
+}
+
+asyncChecks().then(() => {
+  console.log(`\nAll ${passed} checks passed. The fire burns true. 🔥`);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}).catch(() => {
+  // a failed check already logged + set exitCode; just clean up the temp DB
+  fs.rmSync(tmp, { recursive: true, force: true });
+});

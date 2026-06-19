@@ -201,3 +201,77 @@ async function handleRealtimeEvent(dc, ev) {
 
 $('voice-start').addEventListener('click', startVoice);
 $('voice-stop').addEventListener('click', stopVoice);
+
+// --- prep-pack import -------------------------------------------------------
+// Stream the newline-delimited JSON from /assist/import and show each card and
+// each queued image as it lands. The same cards/images appear live on /dm.
+function importRow(text, cls) {
+  const box = $('import-log');
+  if (box.querySelector('.muted')) box.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'row' + (cls ? ' ' + cls : '');
+  row.textContent = text;
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+  return row;
+}
+
+function handleImportEvent(ev) {
+  if (ev.stage === 'card') importRow(`📇 Creating card: ${ev.name}`);
+  else if (ev.stage === 'image') importRow(`🎨 Generating image — ${ev.prompt.slice(0, 80)}…`);
+  else if (ev.stage === 'image_done') {
+    const r = importRow('   ✓ image ready');
+    const img = document.createElement('img'); img.src = ev.image_path; r.appendChild(img);
+  } else if (ev.stage === 'image_error') importRow(`   ⚠ image failed: ${ev.error}`, 'err');
+  else if (ev.stage === 'card_done') importRow(`   ✓ card #${ev.id} done`);
+  else if (ev.done) {
+    const s = ev.summary || {};
+    importRow(`✅ Imported ${s.cards_created} card(s), ${s.images_made} image(s)` +
+      (s.image_errors && s.image_errors.length ? `, ${s.image_errors.length} image(s) failed` : '') + '.');
+  } else if (ev.error) importRow(`⚠ ${ev.error}`, 'err');
+}
+
+async function runImport(file) {
+  $('import-pick').disabled = true;
+  importRow(`Reading ${file.name}…`);
+  let res;
+  try {
+    const text = await file.text();
+    JSON.parse(text); // fail fast on a non-JSON file before hitting the server
+    res = await fetch('/assist/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text,
+    });
+  } catch (err) {
+    importRow(`⚠ ${err.message}`, 'err');
+    $('import-pick').disabled = false;
+    return;
+  }
+  // Consume the NDJSON stream line by line.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line) try { handleImportEvent(JSON.parse(line)); } catch { /* skip partial */ }
+      }
+    }
+    if (buf.trim()) try { handleImportEvent(JSON.parse(buf.trim())); } catch { /* ignore */ }
+  } catch (err) {
+    importRow(`⚠ import interrupted: ${err.message}`, 'err');
+  } finally {
+    $('import-pick').disabled = false;
+  }
+}
+
+$('import-pick').addEventListener('click', () => $('import-file').click());
+$('import-file').addEventListener('change', (e) => {
+  if (e.target.files[0]) runImport(e.target.files[0]);
+  e.target.value = '';
+});

@@ -118,6 +118,22 @@ it). Either set the `OPENAI_API_KEY` environment variable, or simply drop the ke
 plain text file at **`data/openai.key`** (the `data/` folder is private and never touched
 by updates), then restart the server. The models, voice, and image size are tunable in
 `config.js` under `ASSISTANT` — if OpenAI renames a model and a call fails, update it there.
+
+### 📨 Story Arc Builder — hand prep off to a co-GM (no internet, no account)
+
+Want a friend to draft a campaign without giving them the Pi or an AI key? The
+**Story Arc Builder** is a single, self-contained web page — **`public/builder.html`**.
+On the `/assist` screen there's a button to **download it**; email that one file, drop it in
+a shared drive, or save it to a phone. Whoever opens it can flesh out a campaign **fully
+offline**: cards (characters / locations / story beats), chapters and scenes, GM-only
+notes, and **image requests** (just typed descriptions of art they'd like). It autosaves in
+their browser and exports a **"prep pack" `.json`** file.
+
+Back home with internet, the GM returns to **`/assist` → "Import a prep pack,"** picks that
+file, and the Pi turns it into real reveal cards — running every image request through the
+art generator (the **image queue**) and slotting the results into place, with live progress.
+Scenes marked *"start hidden"* come in hidden so the GM still unveils them at the table.
+
 ## 🍄 Mushroom lamp (campfire ambiance)
 
 The projector sits on a glowing "mushroom" stand — an off-the-shelf Bluetooth LED
@@ -196,9 +212,12 @@ db.js            better-sqlite3 schema + prepared statements (card, device, toke
 state.js         in-memory canonical state, all ops, role-scoped snapshots
 ws.js            websocket plumbing: hello/snapshot/action/error; shared client pool + device presence
 assistant.js     prep-time AI campaign assistant (GM port): realtime-voice token mint,
-                 shared tool executor over state.ops, image generation — internet only
+                 shared tool executor over state.ops, image generation, and the
+                 prep-pack importer (/assist/import + image queue) — internet only
 public/          the pages + shared js (ws-client, dice/clock renderers,
                  npc-reveal.js + npc-fx.js drive the reveal cards & particles)
+public/builder.html  self-contained, OFFLINE Story Arc Builder — email it to a co-GM;
+                 exports a prep pack that /assist/import turns into cards
 *.sh             the double-click toolkit (INSTALL/START/STOP/UPDATE — all tee
                  their output into logs/); scripts/_lib.sh is the shared plumbing
 systemd/         service template (installer fills in user + path)

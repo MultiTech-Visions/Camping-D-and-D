@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const R = require('./rules');
 const { state, ops } = require('./state');
 
 const DATA_DIR = process.env.CAMPFIRE_DATA_DIR || path.join(__dirname, 'data');
@@ -191,6 +192,96 @@ async function generateImage(prompt, size) {
   return `/assets/tokens/${name}`;
 }
 
+// --- prep-pack import (the "upload at home" path) ---------------------------
+// A friend/co-GM builds a campaign offline in public/builder.html and exports a
+// "prep pack" JSON (cards + sections + scenes + text-only IMAGE REQUESTS). Here,
+// at home with internet, we turn it into real cards and run every image request
+// through generateImage — the image queue. onProgress streams a line per step so
+// the browser can show the queue working; one bad image is reported and skipped
+// rather than sinking the whole import.
+async function importPack(pack, { broadcast, onProgress }) {
+  const emit = typeof onProgress === 'function' ? onProgress : () => {};
+  if (!pack || typeof pack !== 'object' || pack.format !== 'campfire-saga-pack') {
+    throw Object.assign(new Error('not a Campfire Saga prep pack (missing format marker)'), { expected: true, status: 400 });
+  }
+  const cards = Array.isArray(pack.cards) ? pack.cards : [];
+  R.assert(cards.length > 0, 'this prep pack has no cards in it');
+
+  // Pre-flight: validate every card's kind + name BEFORE creating anything or
+  // spending money on images, so a trivial typo can't leave a half-built import.
+  cards.forEach((c, i) => {
+    R.assertOneOf(c && c.kind, config.CARD_KINDS, `cards[${i}].kind`);
+    R.assertNonEmptyString(c && c.name, `cards[${i}].name`);
+  });
+
+  const summary = { cards_created: 0, images_made: 0, image_errors: [] };
+
+  // Generate every prompt in a request list, in order, returning the asset
+  // paths that succeeded. Failures are logged into the summary and skipped.
+  async function runRequests(list, where) {
+    const out = [];
+    for (const req of (Array.isArray(list) ? list : [])) {
+      const prompt = req && typeof req.prompt === 'string' ? req.prompt.trim() : '';
+      if (!prompt) continue;
+      emit({ stage: 'image', where, prompt });
+      try {
+        const image_path = await generateImage(prompt, req.size);
+        out.push(image_path);
+        summary.images_made++;
+        emit({ stage: 'image_done', where, image_path });
+      } catch (err) {
+        summary.image_errors.push({ where, prompt, error: err.message });
+        emit({ stage: 'image_error', where, prompt, error: err.message });
+      }
+    }
+    return out;
+  }
+
+  for (const card of cards) {
+    const kind = card && card.kind;
+    const name = card && card.name;
+    emit({ stage: 'card', name: name || '(unnamed)', kind });
+    const { created_card_id: id } = ops['card.create']({ kind, name });
+    broadcast();
+
+    const cardImages = await runRequests(card.image_requests, `card "${name}"`);
+
+    const sections = [];
+    for (const s of (Array.isArray(card.sections) ? card.sections : [])) {
+      const secImages = await runRequests(s && s.image_requests, `chapter in "${name}"`);
+      const entries = [];
+      for (const e of (Array.isArray(s && s.entries) ? s.entries : [])) {
+        const entryImages = await runRequests(e && e.image_requests, `scene in "${name}"`);
+        entries.push({
+          label: (e && e.label) || '',
+          text: (e && e.text) || '',
+          // reveal_live (default true) means the GM unveils it during play, so it
+          // starts hidden on the projector. visible is the inverse.
+          visible: e && e.reveal_live === false ? true : false,
+          images: entryImages,
+        });
+      }
+      sections.push({ title: (s && s.title) || '', images: secImages, entries });
+    }
+
+    const update = { card_id: id, sections };
+    if (card.subtitle !== undefined) update.subtitle = String(card.subtitle);
+    if (card.notes !== undefined) update.notes = String(card.notes);
+    if (card.bg_effect && config.NPC_EFFECTS.includes(card.bg_effect)) update.bg_effect = card.bg_effect;
+    if (cardImages.length) update.images = cardImages;
+    if (kind === 'npc') {
+      if (Number.isInteger(card.token_w)) update.token_w = card.token_w;
+      if (Number.isInteger(card.token_h)) update.token_h = card.token_h;
+    }
+    ops['card.update'](update);
+    broadcast();
+    summary.cards_created++;
+    emit({ stage: 'card_done', id, name: name || '(unnamed)' });
+  }
+
+  return summary;
+}
+
 // --- the one tool executor (shared by voice + text) -------------------------
 // Returns a plain object the model receives as the tool result. Mutating tools
 // broadcast a fresh snapshot so any open /dm or /display updates live.
@@ -289,6 +380,25 @@ function mount(app, { broadcast, log }) {
     }
   });
 
+  // Import a prep pack built offline in builder.html. Streams newline-delimited
+  // JSON progress (one line per card/image) so the browser can show the image
+  // queue working live, then a final {done,summary} line. Errors mid-stream are
+  // sent as a {error} line rather than an HTTP status, since the body is already
+  // flowing by then.
+  app.post('/assist/import', express.json({ limit: '8mb' }), async (req, res) => {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    const send = (o) => { res.write(JSON.stringify(o) + '\n'); };
+    try {
+      const summary = await importPack(req.body, { broadcast, onProgress: send });
+      log(`assist/import ok: ${summary.cards_created} cards, ${summary.images_made} images, ${summary.image_errors.length} image errors`);
+      send({ done: true, summary });
+    } catch (err) {
+      log(`assist/import error: ${err.message}`);
+      send({ error: err.message });
+    }
+    res.end();
+  });
+
   // Text-chat agent loop: run Chat Completions with tools, executing inline.
   // The client sends the running [{role,content}] history; we prepend the system
   // prompt and return the final reply plus a log of what was built.
@@ -332,4 +442,4 @@ function mount(app, { broadcast, log }) {
   });
 }
 
-module.exports = { mount, executeTool, TOOL_DEFS, SYSTEM_PROMPT };
+module.exports = { mount, executeTool, importPack, TOOL_DEFS, SYSTEM_PROMPT };

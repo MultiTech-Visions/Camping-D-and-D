@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire Saga — Story Arc Builder</title>
+<!--
+  SELF-CONTAINED, OFFLINE story-arc builder.
+
+  This one file has no dependencies and talks to no server. Email it, drop it in
+  a shared drive, save it to a phone — whoever opens it can flesh out a campaign
+  with no internet. It autosaves to the browser it's opened in, and exports a
+  "prep pack" .json file.
+
+  Back home (with internet) the GM opens /assist on the Pi and imports that pack:
+  every card becomes a real reveal card, and every IMAGE REQUEST below is sent
+  through the art generator (the "image queue") and slotted into place.
+
+  Keep it dependency-free and single-file on purpose — that's what makes it
+  shareable and offline-proof.
+-->
+<style>
+  :root {
+    --bg: #14100d; --bg-card: #1f1813; --bg-raised: #2a2019;
+    --ink: #f3e9d8; --ink-dim: #b3a48d;
+    --ember: #ff8c2e; --ember-deep: #d9531e; --gold: #f0b429;
+    --danger: #e25543; --ok: #6fbf63; --line: #3d3025; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(ellipse 90% 50% at 50% -10%, #2c1c10 0%, transparent 60%), var(--bg);
+    color: var(--ink); font-family: Georgia, 'Times New Roman', serif; line-height: 1.45;
+    min-height: 100vh; -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 14px 14px 120px; }
+  h1, h2, h3 { font-weight: 700; letter-spacing: 0.02em; }
+  h1 { color: var(--ember); text-shadow: 0 0 22px rgba(255,140,46,.35); margin: 8px 0 4px; font-size: 1.7rem; }
+  h2 { color: var(--gold); border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-top: 26px; font-size: 1.2rem; }
+  h3 { color: var(--ink); margin: 0 0 6px; font-size: 1.02rem; }
+  a { color: var(--ember); }
+  .subtitle { color: var(--ink-dim); font-style: italic; margin-top: 0; }
+  .muted { color: var(--ink-dim); }
+  .small { font-size: .85rem; }
+  .flame { font-size: 2rem; line-height: 1; }
+
+  label { display: block; font-family: 'Trebuchet MS', sans-serif; font-size: .72rem;
+    text-transform: uppercase; letter-spacing: .05em; color: var(--ink-dim); margin: 10px 0 3px; }
+  input, textarea, select {
+    width: 100%; background: var(--bg-raised); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 10px; font: inherit; font-size: 1rem;
+  }
+  textarea { resize: vertical; min-height: 64px; line-height: 1.4; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--ember); }
+
+  button {
+    background: var(--bg-raised); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 999px; padding: 9px 16px; font: inherit; font-size: .95rem; cursor: pointer;
+  }
+  button:hover { border-color: var(--ember); }
+  button.primary { background: var(--ember-deep); border-color: var(--ember); color: #fff; font-weight: 700; }
+  button.ghost { background: transparent; }
+  button.tiny { padding: 4px 10px; font-size: .82rem; }
+  button.danger { color: var(--danger); }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  .panel { background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; margin: 12px 0; }
+  .card-block { border-left: 4px solid var(--ember); }
+  .section-block { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px; margin: 10px 0; }
+  .entry-block { border: 1px dashed var(--line); border-radius: 10px; padding: 10px; margin: 8px 0;
+    background: rgba(0,0,0,.18); }
+  .block-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  .block-head .grow { flex: 1; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .imgreq { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+  .imgreq textarea { min-height: 44px; }
+  .imgreq select { width: auto; flex: 0 0 auto; }
+  .imgreq .kill { flex: 0 0 auto; }
+  .kicker { font-family: 'Trebuchet MS', sans-serif; font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--gold); }
+  .chip { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: .78rem;
+    border: 1px solid var(--line); background: var(--bg-raised); color: var(--ink-dim); }
+
+  .toolbar { position: sticky; top: 0; z-index: 5; background: rgba(20,16,13,.94);
+    backdrop-filter: blur(4px); border-bottom: 1px solid var(--line); padding: 10px 0; margin-bottom: 8px; }
+  .toolbar .wrap-inner { max-width: 880px; margin: 0 auto; padding: 0 14px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .saved-note { font-size: .8rem; color: var(--ok); margin-left: auto; }
+
+  details.help { border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; margin: 12px 0; background: var(--bg-card); }
+  details.help summary { cursor: pointer; padding: 12px 0; color: var(--gold); font-family: 'Trebuchet MS', sans-serif; }
+  details.help[open] { padding-bottom: 12px; }
+  .help ul { margin: 4px 0; padding-left: 20px; }
+  .help li { margin: 4px 0; }
+  .count { font-size: .72rem; color: var(--ink-dim); float: right; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="wrap-inner">
+    <button class="primary" id="export">⬇ Export prep pack (.json)</button>
+    <button class="ghost" id="import">⬆ Open a saved pack</button>
+    <button class="ghost" id="copytext">📋 Copy as text</button>
+    <button class="ghost danger" id="reset">Start over</button>
+    <input type="file" id="file" accept=".json,application/json" style="display:none">
+    <span class="saved-note" id="saved"></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <div class="flame">🔥</div>
+    <h1>Story Arc Builder</h1>
+    <p class="subtitle">Sketch out a campaign — places, characters, and story beats — offline.
+      Export it as one file and hand it back to be loaded onto the table.</p>
+  </header>
+
+  <details class="help">
+    <summary>How this works (read me first)</summary>
+    <ul>
+      <li><b>No internet needed.</b> Fill things in whenever you have a minute. Your work
+        autosaves in this browser, so you can close the tab and come back.</li>
+      <li>A campaign is built from <b>cards</b>. A card is one full-screen reveal at the table.
+        Three kinds: <b>Character/Monster</b> (an NPC — its first picture also becomes its battle-map token),
+        <b>Location</b> (a place the party arrives at), and <b>Story beat</b> (a narrated scene or handout).</li>
+      <li>Inside a card you add <b>chapters</b>, and inside each chapter <b>scenes</b>. The GM reveals
+        scenes one at a time during play, so write plenty of short, punchy ones.</li>
+      <li><b>Notes</b> are GM-only — players never see them. Put secrets, stat ideas, and reminders there.</li>
+      <li><b>Image requests</b> are just descriptions of art you'd like. You can't make the art here
+        (no internet) — instead describe it, and it gets generated automatically when the pack is loaded
+        at home. Be vivid: style, lighting, mood, who/what's in frame.</li>
+      <li>When you're done (or just want to send progress), tap <b>Export prep pack</b> and email or
+        share the downloaded file.</li>
+    </ul>
+  </details>
+
+  <div class="panel">
+    <label>Campaign / arc title <span class="count" id="title-count"></span></label>
+    <input id="arc-title" maxlength="120" placeholder="e.g. The Sunken Crown">
+    <label>Notes to the GM about this arc (optional, GM-only)</label>
+    <textarea id="arc-notes" maxlength="4000" placeholder="The big picture: the threat, the stakes, how you imagine it opening and where it could go…"></textarea>
+  </div>
+
+  <h2>Cards <span class="muted small" id="card-count"></span></h2>
+  <div id="cards"></div>
+
+  <div class="btn-row" style="margin-top:12px">
+    <button class="primary" data-add="story">+ Story beat</button>
+    <button data-add="npc">+ Character / Monster</button>
+    <button data-add="location">+ Location</button>
+  </div>
+
+  <p class="muted small" style="margin-top:30px">Campfire Saga · Story Arc Builder ·
+    everything stays on this device until you export it.</p>
+</div>
+
+<script>
+'use strict';
+
+// ---- constants kept in step with the Pi's card model -----------------------
+const KINDS = {
+  npc:      { label: 'Character / Monster', icon: '👤' },
+  location: { label: 'Location',            icon: '🗺' },
+  story:    { label: 'Story beat',          icon: '📖' },
+};
+const EFFECTS = ['embers', 'none', 'snow', 'rain', 'motes', 'arcane'];
+const SIZES = [
+  { v: '1024x1024', label: 'Square' },
+  { v: '1024x1536', label: 'Portrait' },
+  { v: '1536x1024', label: 'Wide' },
+];
+const STORE_KEY = 'campfire-arc-builder-v1';
+const FORMAT = 'campfire-saga-pack';
+
+// ---- the working document --------------------------------------------------
+// We keep ONE plain object as the source of truth. Inputs are bound directly to
+// the objects they edit (by reference), so typing never triggers a re-render and
+// never steals focus. We only re-render the tree on structural changes.
+let doc = blankDoc();
+
+function blankDoc() {
+  return { format: FORMAT, version: 1, title: '', notes: '', cards: [] };
+}
+function newCard(kind) {
+  return {
+    kind, name: '', subtitle: '', notes: '', bg_effect: 'embers',
+    token_w: 1, token_h: 1, image_requests: [], sections: [],
+  };
+}
+function newSection() { return { title: '', image_requests: [], entries: [] }; }
+function newEntry() { return { label: '', text: '', reveal_live: true, image_requests: [] }; }
+function newImageReq() { return { prompt: '', size: '1024x1024' }; }
+
+// ---- tiny DOM helpers ------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+function el(tag, props = {}, kids = []) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') n.className = v;
+    else if (k === 'html') n.innerHTML = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null) n.setAttribute(k, v);
+  }
+  for (const c of [].concat(kids)) if (c) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  return n;
+}
+// Bind a text input / textarea / select to obj[key], saving on every change.
+function bind(input, obj, key) {
+  input.value = obj[key] != null ? obj[key] : '';
+  input.addEventListener('input', () => { obj[key] = input.value; scheduleSave(); });
+  return input;
+}
+
+// ---- image-request editor (shared by card / chapter / scene) ---------------
+function imageReqList(owner, blurb) {
+  const box = el('div');
+  const list = el('div');
+  function draw() {
+    list.innerHTML = '';
+    owner.image_requests.forEach((req, i) => {
+      const sizeSel = el('select');
+      SIZES.forEach((s) => sizeSel.appendChild(el('option', { value: s.v }, s.label)));
+      sizeSel.value = req.size;
+      sizeSel.addEventListener('change', () => { req.size = sizeSel.value; scheduleSave(); });
+      const prompt = bind(el('textarea', { placeholder: 'Describe the picture you want…', maxlength: 1200 }), req, 'prompt');
+      const kill = el('button', { class: 'tiny ghost kill', title: 'Remove', onclick() { owner.image_requests.splice(i, 1); draw(); scheduleSave(); } }, '✕');
+      list.appendChild(el('div', { class: 'imgreq' }, [prompt, sizeSel, kill]));
+    });
+  }
+  draw();
+  const add = el('button', { class: 'tiny', onclick() { owner.image_requests.push(newImageReq()); draw(); scheduleSave(); } }, '+ Image request');
+  box.appendChild(el('div', { class: 'kicker', style: 'margin-top:8px' }, '🎨 Image requests'));
+  if (blurb) box.appendChild(el('div', { class: 'muted small', style: 'margin:2px 0 4px' }, blurb));
+  box.appendChild(list);
+  box.appendChild(add);
+  return box;
+}
+
+// ---- scene (entry) editor --------------------------------------------------
+function entryEditor(section, entry, idx, redrawSection) {
+  const block = el('div', { class: 'entry-block' });
+  const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(section.entries, idx, idx - 1); redrawSection(); scheduleSave(); } }, '↑');
+  const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(section.entries, idx, idx + 1); redrawSection(); scheduleSave(); } }, '↓');
+  const kill = el('button', { class: 'tiny ghost danger', title: 'Delete scene', onclick() { section.entries.splice(idx, 1); redrawSection(); scheduleSave(); } }, '🗑');
+  block.appendChild(el('div', { class: 'block-head' }, [
+    el('span', { class: 'kicker' }, `Scene ${idx + 1}`),
+    el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
+  ]));
+
+  block.appendChild(el('label', {}, 'Scene label (optional, short)'));
+  block.appendChild(bind(el('input', { maxlength: 80, placeholder: 'e.g. The door creaks open' }), entry, 'label'));
+  block.appendChild(el('label', {}, 'What happens / what the players see or hear'));
+  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: 'A vivid paragraph or two. The GM reveals this on screen.' }), entry, 'text'));
+
+  const live = el('input', { type: 'checkbox' });
+  live.checked = !!entry.reveal_live;
+  live.addEventListener('change', () => { entry.reveal_live = live.checked; scheduleSave(); });
+  const liveLabel = el('label', { style: 'display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:.9rem;margin-top:10px' }, [
+    live, document.createTextNode('Start hidden — the GM reveals this live during play'),
+  ]);
+  block.appendChild(liveLabel);
+
+  block.appendChild(imageReqList(entry, 'Art for this scene (a panel shown while the scene is up).'));
+  return block;
+}
+
+// ---- chapter (section) editor ----------------------------------------------
+function sectionEditor(card, section, idx, redrawCard) {
+  const block = el('div', { class: 'section-block' });
+  const title = bind(el('input', { class: 'grow', maxlength: 80, placeholder: `Chapter ${idx + 1} title (optional)` }), section, 'title');
+  const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(card.sections, idx, idx - 1); redrawCard(); scheduleSave(); } }, '↑');
+  const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(card.sections, idx, idx + 1); redrawCard(); scheduleSave(); } }, '↓');
+  const kill = el('button', { class: 'tiny ghost danger', title: 'Delete chapter', onclick() { card.sections.splice(idx, 1); redrawCard(); scheduleSave(); } }, '🗑');
+  block.appendChild(el('div', { class: 'block-head' }, [
+    el('span', { class: 'kicker' }, '📑 Chapter'), title, el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
+  ]));
+
+  const scenes = el('div');
+  function redrawScenes() {
+    scenes.innerHTML = '';
+    section.entries.forEach((e, i) => scenes.appendChild(entryEditor(section, e, i, redrawScenes)));
+  }
+  redrawScenes();
+  block.appendChild(scenes);
+  block.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, '+ Scene'));
+  block.appendChild(imageReqList(section, 'Art for the chapter as a whole.'));
+  return block;
+}
+
+// ---- card editor -----------------------------------------------------------
+function cardEditor(card, idx) {
+  const block = el('div', { class: 'panel card-block' });
+
+  const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(doc.cards, idx, idx - 1); renderCards(); scheduleSave(); } }, '↑');
+  const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(doc.cards, idx, idx + 1); renderCards(); scheduleSave(); } }, '↓');
+  const kill = el('button', { class: 'tiny ghost danger', title: 'Delete card', onclick() { if (confirm('Delete this whole card?')) { doc.cards.splice(idx, 1); renderCards(); scheduleSave(); } } }, '🗑 Delete');
+  block.appendChild(el('div', { class: 'block-head' }, [
+    el('span', { class: 'chip' }, `${KINDS[card.kind].icon} ${KINDS[card.kind].label}`),
+    el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
+  ]));
+
+  block.appendChild(el('label', {}, card.kind === 'npc' ? 'Name' : card.kind === 'location' ? 'Place name' : 'Title'));
+  block.appendChild(bind(el('input', { maxlength: 120, placeholder: card.kind === 'npc' ? 'e.g. Mara the Smuggler' : card.kind === 'location' ? 'e.g. The Drowned Market' : 'e.g. Ambush at the ford' }), card, 'name'));
+
+  const grid = el('div', { class: 'grid2' });
+  const sub = el('div');
+  sub.appendChild(el('label', {}, 'Subtitle (short, shown on screen)'));
+  sub.appendChild(bind(el('input', { maxlength: 120, placeholder: 'A line of flavor' }), card, 'subtitle'));
+  grid.appendChild(sub);
+  const fx = el('div');
+  fx.appendChild(el('label', {}, 'Background effect'));
+  const fxSel = el('select');
+  EFFECTS.forEach((e) => fxSel.appendChild(el('option', { value: e }, e)));
+  fxSel.value = card.bg_effect;
+  fxSel.addEventListener('change', () => { card.bg_effect = fxSel.value; scheduleSave(); });
+  fx.appendChild(fxSel);
+  grid.appendChild(fx);
+  block.appendChild(grid);
+
+  if (card.kind === 'npc') {
+    const tgrid = el('div', { class: 'grid2' });
+    const tw = el('div'); tw.appendChild(el('label', {}, 'Map token width (cells)'));
+    tw.appendChild(bindNum(el('input', { type: 'number', min: 1, max: 50 }), card, 'token_w'));
+    const th = el('div'); th.appendChild(el('label', {}, 'Map token height (cells)'));
+    th.appendChild(bindNum(el('input', { type: 'number', min: 1, max: 50 }), card, 'token_h'));
+    tgrid.appendChild(tw); tgrid.appendChild(th);
+    block.appendChild(tgrid);
+  }
+
+  block.appendChild(el('label', {}, 'GM-only notes (players never see these)'));
+  block.appendChild(bind(el('textarea', { maxlength: 8000, placeholder: 'Secrets, stat ideas, motivations, what triggers what…' }), card, 'notes'));
+
+  block.appendChild(imageReqList(card, card.kind === 'npc'
+    ? 'A portrait is generated for the card; the first one also becomes the battle-map token.'
+    : 'Cover / establishing art for this card.'));
+
+  block.appendChild(el('h3', { style: 'margin-top:16px' }, 'Chapters & scenes'));
+  const secs = el('div');
+  function redrawSecs() {
+    secs.innerHTML = '';
+    card.sections.forEach((s, i) => secs.appendChild(sectionEditor(card, s, i, redrawSecs)));
+  }
+  redrawSecs();
+  block.appendChild(secs);
+  block.appendChild(el('button', { class: 'tiny', onclick() { card.sections.push(newSection()); redrawSecs(); scheduleSave(); } }, '+ Chapter'));
+
+  return block;
+}
+
+function bindNum(input, obj, key) {
+  input.value = obj[key];
+  input.addEventListener('input', () => {
+    const n = parseInt(input.value, 10);
+    obj[key] = Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1;
+    scheduleSave();
+  });
+  return input;
+}
+function swap(arr, i, j) { if (j < 0 || j >= arr.length) return; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
+
+// ---- top-level render ------------------------------------------------------
+function renderCards() {
+  const host = $('cards');
+  host.innerHTML = '';
+  if (!doc.cards.length) {
+    host.appendChild(el('p', { class: 'muted' }, 'No cards yet. Add a story beat, character, or location below to begin.'));
+  }
+  doc.cards.forEach((c, i) => host.appendChild(cardEditor(c, i)));
+  $('card-count').textContent = doc.cards.length ? `(${doc.cards.length})` : '';
+}
+
+function renderAll() {
+  bind($('arc-title'), doc, 'title');
+  bind($('arc-notes'), doc, 'notes');
+  renderCards();
+}
+
+// ---- persistence -----------------------------------------------------------
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400);
+  $('saved').textContent = 'saving…';
+}
+function save() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(doc));
+    const t = new Date();
+    $('saved').textContent = '✓ saved ' + t.toLocaleTimeString();
+  } catch (e) {
+    $('saved').textContent = '⚠ could not autosave (export to be safe)';
+  }
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d && d.format === FORMAT) doc = normalize(d);
+    }
+  } catch (e) { /* start fresh */ }
+}
+
+// Make any imported/restored pack safe to edit: fill in missing arrays/fields.
+function normalize(d) {
+  const out = blankDoc();
+  out.title = str(d.title); out.notes = str(d.notes);
+  out.cards = (Array.isArray(d.cards) ? d.cards : []).map((c) => {
+    const kind = KINDS[c.kind] ? c.kind : 'story';
+    const card = newCard(kind);
+    card.name = str(c.name); card.subtitle = str(c.subtitle); card.notes = str(c.notes);
+    card.bg_effect = EFFECTS.includes(c.bg_effect) ? c.bg_effect : 'embers';
+    card.token_w = clamp(c.token_w, 1, 50, 1); card.token_h = clamp(c.token_h, 1, 50, 1);
+    card.image_requests = reqs(c.image_requests);
+    card.sections = (Array.isArray(c.sections) ? c.sections : []).map((s) => ({
+      title: str(s.title), image_requests: reqs(s.image_requests),
+      entries: (Array.isArray(s.entries) ? s.entries : []).map((e) => ({
+        label: str(e.label), text: str(e.text),
+        reveal_live: e.reveal_live === undefined ? true : !!e.reveal_live,
+        image_requests: reqs(e.image_requests),
+      })),
+    }));
+    return card;
+  });
+  return out;
+}
+function reqs(a) {
+  return (Array.isArray(a) ? a : []).map((r) => ({
+    prompt: str(r && r.prompt), size: SIZES.some((s) => s.v === (r && r.size)) ? r.size : '1024x1024',
+  }));
+}
+function str(v) { return typeof v === 'string' ? v : (v == null ? '' : String(v)); }
+function clamp(v, lo, hi, dflt) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; }
+
+// ---- export / import / text ------------------------------------------------
+function exportPack() {
+  const out = JSON.parse(JSON.stringify(doc));
+  out.created = new Date().toISOString();
+  out.generated_by = 'Campfire Saga Story Arc Builder';
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  const slug = (doc.title || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'campaign';
+  const a = el('a', { href: URL.createObjectURL(blob), download: `${slug}-prep-pack.json` });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function importPack(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const d = JSON.parse(reader.result);
+      if (!d || d.format !== FORMAT) throw new Error('That doesn’t look like a Story Arc prep pack.');
+      if (doc.cards.length && !confirm('Replace what you have open with the file you picked?')) return;
+      doc = normalize(d);
+      renderAll(); save();
+    } catch (e) { alert('Could not open that file: ' + e.message); }
+  };
+  reader.readAsText(file);
+}
+
+function asPlainText() {
+  const L = [];
+  L.push((doc.title || 'Untitled campaign').toUpperCase());
+  if (doc.notes) L.push('\n' + doc.notes);
+  doc.cards.forEach((c, i) => {
+    L.push(`\n\n=== ${i + 1}. [${KINDS[c.kind].label}] ${c.name || '(unnamed)'} ===`);
+    if (c.subtitle) L.push(c.subtitle);
+    if (c.notes) L.push('GM notes: ' + c.notes);
+    c.image_requests.forEach((r) => r.prompt && L.push('  🎨 ' + r.prompt));
+    c.sections.forEach((s, si) => {
+      L.push(`\n  -- Chapter ${si + 1}${s.title ? ': ' + s.title : ''} --`);
+      s.image_requests.forEach((r) => r.prompt && L.push('  🎨 ' + r.prompt));
+      s.entries.forEach((e, ei) => {
+        L.push(`   ${ei + 1}.${e.label ? ' ' + e.label : ''}`);
+        if (e.text) L.push('      ' + e.text.replace(/\n/g, '\n      '));
+        e.image_requests.forEach((r) => r.prompt && L.push('      🎨 ' + r.prompt));
+      });
+    });
+  });
+  return L.join('\n');
+}
+
+// ---- wire up ---------------------------------------------------------------
+document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
+  doc.cards.push(newCard(b.getAttribute('data-add')));
+  renderCards(); scheduleSave();
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}));
+$('export').addEventListener('click', exportPack);
+$('import').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', (e) => { if (e.target.files[0]) importPack(e.target.files[0]); e.target.value = ''; });
+$('copytext').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(asPlainText()); $('saved').textContent = '✓ copied to clipboard'; }
+  catch (e) { prompt('Copy the text below:', asPlainText()); }
+});
+$('reset').addEventListener('click', () => {
+  if (confirm('Clear everything and start over? (Export first if you want to keep it.)')) {
+    doc = blankDoc(); renderAll(); save();
+  }
+});
+window.addEventListener('beforeunload', save);
+
+load();
+renderAll();
+</script>
+</body>
+</html>
