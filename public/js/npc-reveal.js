@@ -273,12 +273,21 @@ window.CampfireNPCReveal = (function () {
         el(`<span class="npc-focus-corner bl">⚜</span>`),
         el(`<span class="npc-focus-corner br">⚜</span>`),
       );
+      // left column: a cross-fading slideshow of the focused entry's own images
+      // (hidden when the entry has none, so the popup falls back to text only)
+      const figure = el(`<div class="npc-focus-pop-figure" style="display:none"></div>`);
+      const slideA = el(`<img class="npc-focus-slide" draggable="false" decoding="async" alt="">`);
+      const slideB = el(`<img class="npc-focus-slide" draggable="false" decoding="async" alt="">`);
+      figure.append(slideA, slideB);
+      const content = el(`<div class="npc-focus-pop-content"></div>`);
       const label = el(`<div class="npc-focus-pop-label"></div>`);
       const body = el(`<div class="npc-focus-pop-body"></div>`);
-      box.append(label, body);
+      content.append(label, body);
+      box.append(figure, content);
       scrim.appendChild(box);
       cur.overlay.appendChild(scrim);
-      cur.pop = { scrim, box, label, body, key: null };
+      cur.pop = { scrim, box, label, body, figure, slides: [slideA, slideB],
+                  active: 0, idx: 0, timer: null, imgsKey: null, imgs: [], key: null };
     }
     if (refresh || cur.pop.key !== cur.focusKey) {
       cur.pop.key = cur.focusKey;
@@ -287,9 +296,46 @@ window.CampfireNPCReveal = (function () {
       cur.pop.body.textContent = e.text || '';
       cur.pop.body.scrollTop = 0;
     }
+    // refresh the entry slideshow every pass — setPopSlides no-ops when the image
+    // list is unchanged, so a running show isn't restarted
+    setPopSlides(entryImages(npc, focus));
+  }
+
+  // A self-contained cross-fade slideshow for the focus popup's left column. A
+  // plain timed dissolve — independent of the main frame's pan machinery, which
+  // is overkill at popup size.
+  const POP_SLIDE_MS = 4500;
+  function stopPopSlides() {
+    if (cur && cur.pop && cur.pop.timer) { clearInterval(cur.pop.timer); cur.pop.timer = null; }
+  }
+  function setPopSlides(imgs) {
+    if (!cur || !cur.pop) return;
+    const p = cur.pop;
+    const key = imagesKey(imgs);
+    if (p.imgsKey === key) return; // same images — let the running show continue
+    p.imgsKey = key;
+    stopPopSlides();
+    const has = imgs.length > 0;
+    p.box.classList.toggle('has-figure', has);
+    p.figure.style.display = has ? '' : 'none';
+    if (!has) { p.slides[0].src = p.slides[1].src = ''; return; }
+    p.imgs = imgs.slice();
+    p.idx = 0; p.active = 0;
+    p.slides[0].src = p.imgs[0]; p.slides[0].style.opacity = '1';
+    p.slides[1].style.opacity = '0';
+    if (p.imgs.length > 1) {
+      p.timer = setInterval(() => {
+        const nextIdx = (p.idx + 1) % p.imgs.length;
+        const out = p.slides[p.active], inn = p.slides[p.active ^ 1];
+        inn.src = p.imgs[nextIdx];
+        inn.style.opacity = '1'; out.style.opacity = '0';
+        p.active ^= 1; p.idx = nextIdx;
+      }, POP_SLIDE_MS);
+    }
   }
   function removeFocusPopup(immediate) {
     if (!cur || !cur.pop) return;
+    stopPopSlides();
     const scrim = cur.pop.scrim;
     cur.pop = null;
     if (immediate) { scrim.remove(); return; }
@@ -477,6 +523,49 @@ window.CampfireNPCReveal = (function () {
     refreshLink();
   }
 
+  // --- focus-aware gallery -----------------------------------------------------
+  // A whole-section focus narrows the main frame to just that section's images
+  // (its own + its entries'), dropping the card's gallery and every other
+  // section. No focus, or an entry focus (handled by the popup), shows it all.
+  function focusedSlides(npc) {
+    const all = npc.images || [];
+    const src = npc.image_sources || [];
+    const f = npc.focus;
+    const sectionFocus = f && typeof f.section === 'number' && (f.entry === null || f.entry === undefined);
+    if (!sectionFocus || src.length !== all.length) return { images: all, sources: src, map: null };
+    const images = [], sources = [], map = [];
+    all.forEach((img, i) => {
+      if (src[i] && src[i].s === f.section) { images.push(img); sources.push(src[i]); map.push(i); }
+    });
+    // a focused section with no images of its own keeps the whole gallery rather
+    // than blanking the frame
+    if (!images.length) return { images: all, sources: src, map: null };
+    return { images, sources, map };
+  }
+
+  // Push the (possibly focus-narrowed) gallery into the slideshow, keeping the
+  // image-source list parallel so the connector line still points at the right
+  // text, and translating any GM-held index into the narrowed list.
+  function applyGallery(npc) {
+    const { images, sources, map } = focusedSlides(npc);
+    cur.imageSources = sources;
+    let manual = imgIndexOf(npc);
+    if (map && typeof manual === 'number') {
+      const pos = map.indexOf(manual);
+      manual = pos >= 0 ? pos : null;
+    }
+    applySlides(images, manual);
+  }
+
+  // The focused entry's own images, pulled from the flat gallery by source.
+  function entryImages(npc, focus) {
+    const all = npc.images || [], src = npc.image_sources || [];
+    if (src.length !== all.length) return [];
+    const out = [];
+    all.forEach((img, i) => { const s = src[i]; if (s && s.s === focus.section && s.e === focus.entry) out.push(img); });
+    return out;
+  }
+
   function show(npc, { dismissible = false, onClose } = {}) {
     if (cur && cur.npcId === npc.id) { update(npc); return; }
     hide();
@@ -538,7 +627,7 @@ window.CampfireNPCReveal = (function () {
 
     cur.showLink = npc.show_link !== false;
     paintInfo(npc);
-    applySlides(npc.images || [], imgIndexOf(npc));
+    applyGallery(npc);
     applyAmbience(npc);
     applyScroll(npc);
   }
@@ -602,7 +691,7 @@ window.CampfireNPCReveal = (function () {
     if (cur.npcId !== npc.id) { show(npc, { dismissible: !!cur.onClose, onClose: cur.onClose }); return; }
     cur.showLink = npc.show_link !== false;
     paintInfo(npc);
-    applySlides(npc.images || [], imgIndexOf(npc));
+    applyGallery(npc);
     applyAmbience(npc);
     applyScroll(npc);
   }
