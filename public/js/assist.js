@@ -457,6 +457,8 @@ function handleImportEvent(ev) {
   else if (ev.stage === 'image_done') {
     const r = importRow('   ✓ image ready');
     const img = document.createElement('img'); img.src = ev.image_path; r.appendChild(img);
+  } else if (ev.stage === 'image_retry') {
+    importRow(`   ↻ rate-limited/blip — retrying (try ${ev.attempt + 1}) in ${(ev.wait_ms / 1000).toFixed(1)}s…`);
   } else if (ev.stage === 'image_error') importRow(`   ⚠ image failed: ${ev.error}`, 'err');
   else if (ev.stage === 'card_done') importRow(`   ✓ card #${ev.id} done`);
   else if (ev.done) {
