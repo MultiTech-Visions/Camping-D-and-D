@@ -402,8 +402,10 @@ function imageReqList(owner, blurb) {
       sizeSel.value = req.size;
       sizeSel.addEventListener('change', () => { req.size = sizeSel.value; scheduleSave(); });
       const prompt = bind(el('textarea', { placeholder: 'Describe the picture you want…', maxlength: 1200 }), req, 'prompt');
+      const promptWrap = attachExpand(prompt, 'Picture description');
+      promptWrap.style.flex = '1';
       const kill = el('button', { class: 'tiny ghost kill', title: 'Remove', onclick() { owner.image_requests.splice(i, 1); draw(); scheduleSave(); } }, '✕');
-      list.appendChild(el('div', { class: 'imgreq' }, [prompt, sizeSel, kill]));
+      list.appendChild(el('div', { class: 'imgreq' }, [promptWrap, sizeSel, kill]));
     });
   }
   draw();
