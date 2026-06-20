@@ -114,6 +114,42 @@
   .chat-input input { flex: 1; }
   .helper details { margin-top: 8px; }
   .helper summary { cursor: pointer; color: var(--ink-dim); font-size: .82rem; }
+
+  /* Collapsible blocks — a caret folds a card / section / entry so a long
+     campaign stays scannable. The head is clickable; a summary line shows
+     what's hidden while folded. */
+  button.caret { min-width: 30px; padding: 4px 8px; line-height: 1; }
+  .block-head { cursor: pointer; }
+  .collapse-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-style: italic; }
+  .card-block.collapsed, .section-block.collapsed, .entry-block.collapsed { padding-bottom: 10px; }
+
+  /* Full-screen single-field text editor — same look & feel as the GM screen.
+     Flex column on the dynamic viewport height so the on-screen keyboard shrinks
+     the text box, not the header; the Done button always stays reachable. */
+  .ta-wrap { position: relative; }
+  .ta-expand { position: absolute; top: 6px; right: 6px; z-index: 2;
+    padding: 3px 9px; font-size: .8rem; line-height: 1.3;
+    background: rgba(42,32,25,.9); color: var(--ink-dim); }
+  .ta-expand:hover { color: var(--ink); border-color: var(--ember); }
+  .note-editor {
+    position: fixed; inset: 0; height: 100dvh; z-index: 200;
+    background: var(--bg); overflow: hidden; display: flex; flex-direction: column;
+  }
+  .note-editor-bar {
+    flex: 0 0 auto; min-height: 60px; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); background: var(--bg-card);
+  }
+  .note-editor-title { font-weight: 700; color: var(--ink); font-size: 1.02rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note-editor-area {
+    flex: 1 1 auto; min-height: 0; width: 100%;
+    border: none; border-radius: 0; resize: none; padding: 16px;
+    font-size: 1.1rem; line-height: 1.55; overflow-y: auto;
+    background: var(--bg); color: var(--ink);
+  }
+  .note-editor-area:focus { outline: none; border: none; }
 </style>
 </head>
 <body>
@@ -206,6 +242,10 @@
   </div>
 
   <h2>Cards <span class="muted small" id="card-count"></span></h2>
+  <div class="btn-row" id="collapse-controls" style="display:none;margin:-6px 0 8px">
+    <button class="tiny ghost" id="collapse-all">▸ Collapse all</button>
+    <button class="tiny ghost" id="expand-all">▾ Expand all</button>
+  </div>
   <div id="cards"></div>
 
   <div class="btn-row" style="margin-top:12px">
@@ -280,6 +320,76 @@ function bind(input, obj, key) {
   return input;
 }
 
+// ---- collapsible blocks ----------------------------------------------------
+// Fold a card / section / entry so a long campaign stays scannable. State lives
+// on the object as a transient _collapsed flag (stripped on export, like _id).
+// The caret toggles, and so does clicking the head (away from any control).
+function collapsible(block, head, body, obj, summaryFn) {
+  const caret = el('button', { class: 'tiny ghost caret', type: 'button', title: 'Collapse / expand' });
+  const summary = el('span', { class: 'collapse-summary muted small' });
+  function apply() {
+    const c = !!obj._collapsed;
+    body.style.display = c ? 'none' : '';
+    caret.textContent = c ? '▸' : '▾';
+    const txt = c && summaryFn ? (summaryFn() || '') : '';
+    summary.textContent = txt;
+    summary.style.display = txt ? '' : 'none';
+    block.classList.toggle('collapsed', c);
+  }
+  function toggle() { obj._collapsed = !obj._collapsed; apply(); scheduleSave(); }
+  caret.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  head.addEventListener('click', (e) => {
+    if (e.target.closest('button, input, textarea, select, a, label')) return;
+    toggle();
+  });
+  apply();
+  return { caret, summary, apply };
+}
+
+// ---- full-screen text editor -----------------------------------------------
+// A big distraction-free editor for long fields — same look & feel as the GM
+// screen. Opens with the current text, writes back on Done (or Esc). Writes go
+// through the textarea's own 'input' event so the normal autosave still fires.
+function openTextEditor(title, value, onSave, maxlen) {
+  const overlay = el('div', { class: 'note-editor' });
+  const bar = el('div', { class: 'note-editor-bar' });
+  bar.appendChild(el('span', { class: 'note-editor-title' }, title || 'Edit text'));
+  const done = el('button', { class: 'primary', type: 'button' }, 'Done');
+  bar.appendChild(done);
+  const ta = el('textarea', { class: 'note-editor-area', placeholder: 'Type away — this is all free text…' });
+  if (maxlen) ta.maxLength = maxlen;
+  ta.value = value || '';
+  overlay.append(bar, ta);
+  const prevOverflow = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  function close() {
+    if (ta.value !== (value || '')) onSave(ta.value);
+    document.body.style.overflow = prevOverflow;
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
+  done.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+}
+
+// Wrap a textarea with a corner "full screen" button that opens the editor.
+function attachExpand(textarea, title) {
+  const wrap = el('div', { class: 'ta-wrap' });
+  const btn = el('button', { class: 'tiny ghost ta-expand', type: 'button', title: 'Edit in full screen' }, '⤢ Full screen');
+  btn.addEventListener('click', () => {
+    openTextEditor(typeof title === 'function' ? title() : title, textarea.value, (val) => {
+      textarea.value = val;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }, textarea.maxLength > 0 ? textarea.maxLength : null);
+  });
+  wrap.append(textarea, btn);
+  return wrap;
+}
+
 // ---- image-request editor (shared by card / chapter / scene) ---------------
 function imageReqList(owner, blurb) {
   const box = el('div');
@@ -325,15 +435,18 @@ function entryEditor(section, entry, idx, redrawSection, t) {
   const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(section.entries, idx, idx - 1); redrawSection(); scheduleSave(); } }, '↑');
   const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(section.entries, idx, idx + 1); redrawSection(); scheduleSave(); } }, '↓');
   const kill = el('button', { class: 'tiny ghost danger', title: `Delete ${lower}`, onclick() { section.entries.splice(idx, 1); redrawSection(); scheduleSave(); } }, '🗑');
-  block.appendChild(el('div', { class: 'block-head' }, [
-    el('span', { class: 'kicker' }, `${t.ent} ${idx + 1}`),
-    el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
-  ]));
+  const btnRow = el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]);
+  const head = el('div', { class: 'block-head' }, [
+    el('span', { class: 'kicker' }, `${t.ent} ${idx + 1}`), btnRow,
+  ]);
+  block.appendChild(head);
 
-  block.appendChild(el('label', {}, `${t.ent} label (optional, short)`));
-  block.appendChild(bind(el('input', { maxlength: 80, placeholder: 'e.g. The door creaks open' }), entry, 'label'));
-  block.appendChild(el('label', {}, t.bodyLabel));
-  block.appendChild(bind(el('textarea', { maxlength: 4000, placeholder: t.bodyHint }), entry, 'text'));
+  const body = el('div');
+  body.appendChild(el('label', {}, `${t.ent} label (optional, short)`));
+  body.appendChild(bind(el('input', { maxlength: 80, placeholder: 'e.g. The door creaks open' }), entry, 'label'));
+  body.appendChild(el('label', {}, t.bodyLabel));
+  body.appendChild(attachExpand(bind(el('textarea', { maxlength: 4000, placeholder: t.bodyHint }), entry, 'text'),
+    () => `${t.ent}${entry.label ? ' — ' + entry.label : ''}`));
 
   const live = el('input', { type: 'checkbox' });
   live.checked = !!entry.reveal_live;
@@ -341,9 +454,15 @@ function entryEditor(section, entry, idx, redrawSection, t) {
   const liveLabel = el('label', { style: 'display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:.9rem;margin-top:10px' }, [
     live, document.createTextNode('Keep this hidden at first — you choose when to show it during the game'),
   ]);
-  block.appendChild(liveLabel);
+  body.appendChild(liveLabel);
 
-  block.appendChild(imageReqList(entry, `A picture for this ${lower} (optional).`));
+  body.appendChild(imageReqList(entry, `A picture for this ${lower} (optional).`));
+  block.appendChild(body);
+
+  const { caret, summary } = collapsible(block, head, body, entry,
+    () => entry.label || (entry.text ? entry.text.slice(0, 60) : `(empty ${lower})`));
+  head.insertBefore(caret, head.firstChild);
+  head.insertBefore(summary, btnRow);
   return block;
 }
 
@@ -355,19 +474,31 @@ function sectionEditor(card, section, idx, redrawCard, t) {
   const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(card.sections, idx, idx - 1); redrawCard(); scheduleSave(); } }, '↑');
   const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(card.sections, idx, idx + 1); redrawCard(); scheduleSave(); } }, '↓');
   const kill = el('button', { class: 'tiny ghost danger', title: `Delete ${lower}`, onclick() { card.sections.splice(idx, 1); redrawCard(); scheduleSave(); } }, '🗑');
-  block.appendChild(el('div', { class: 'block-head' }, [
-    el('span', { class: 'kicker' }, `📑 ${t.sec}`), title, el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
-  ]));
+  const btnRow = el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]);
+  const head = el('div', { class: 'block-head' }, [
+    el('span', { class: 'kicker' }, `📑 ${t.sec}`), title, btnRow,
+  ]);
+  block.appendChild(head);
 
+  const body = el('div');
   const scenes = el('div');
   function redrawScenes() {
     scenes.innerHTML = '';
     section.entries.forEach((e, i) => scenes.appendChild(entryEditor(section, e, i, redrawScenes, t)));
   }
   redrawScenes();
-  block.appendChild(scenes);
-  block.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, `+ ${t.ent}`));
-  block.appendChild(imageReqList(section, `A picture for this ${lower} (optional).`));
+  body.appendChild(scenes);
+  body.appendChild(el('button', { class: 'tiny', style: 'margin-top:6px', onclick() { section.entries.push(newEntry()); redrawScenes(); scheduleSave(); } }, `+ ${t.ent}`));
+  body.appendChild(imageReqList(section, `A picture for this ${lower} (optional).`));
+  block.appendChild(body);
+
+  const { caret, summary } = collapsible(block, head, body, section, () => {
+    const n = section.entries.length;
+    return `${n} ${(n === 1 ? t.ent : t.ent + 's').toLowerCase()}`;
+  });
+  summary.style.flex = '0 0 auto';
+  head.insertBefore(caret, head.firstChild);
+  head.insertBefore(summary, btnRow);
   return block;
 }
 
@@ -378,13 +509,15 @@ function cardEditor(card, idx) {
   const moveUp = el('button', { class: 'tiny ghost', title: 'Move up', onclick() { swap(doc.cards, idx, idx - 1); renderCards(); scheduleSave(); } }, '↑');
   const moveDn = el('button', { class: 'tiny ghost', title: 'Move down', onclick() { swap(doc.cards, idx, idx + 1); renderCards(); scheduleSave(); } }, '↓');
   const kill = el('button', { class: 'tiny ghost danger', title: 'Delete card', onclick() { if (confirm('Delete this whole card?')) { doc.cards.splice(idx, 1); renderCards(); scheduleSave(); } } }, '🗑 Delete');
-  block.appendChild(el('div', { class: 'block-head' }, [
-    el('span', { class: 'chip' }, `${KINDS[card.kind].icon} ${KINDS[card.kind].label}`),
-    el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]),
-  ]));
+  const btnRow = el('div', { class: 'btn-row' }, [moveUp, moveDn, kill]);
+  const head = el('div', { class: 'block-head' }, [
+    el('span', { class: 'chip' }, `${KINDS[card.kind].icon} ${KINDS[card.kind].label}`), btnRow,
+  ]);
+  block.appendChild(head);
 
-  block.appendChild(el('label', {}, card.kind === 'npc' ? 'Name' : card.kind === 'location' ? 'Place name' : 'Title'));
-  block.appendChild(bind(el('input', { maxlength: 120, placeholder: card.kind === 'npc' ? 'e.g. Mara the Smuggler' : card.kind === 'location' ? 'e.g. The Drowned Market' : 'e.g. Ambush at the ford' }), card, 'name'));
+  const body = el('div');
+  body.appendChild(el('label', {}, card.kind === 'npc' ? 'Name' : card.kind === 'location' ? 'Place name' : 'Title'));
+  body.appendChild(bind(el('input', { maxlength: 120, placeholder: card.kind === 'npc' ? 'e.g. Mara the Smuggler' : card.kind === 'location' ? 'e.g. The Drowned Market' : 'e.g. Ambush at the ford' }), card, 'name'));
 
   const grid = el('div', { class: 'grid2' });
   const sub = el('div');
@@ -399,7 +532,7 @@ function cardEditor(card, idx) {
   fxSel.addEventListener('change', () => { card.bg_effect = fxSel.value; scheduleSave(); });
   fx.appendChild(fxSel);
   grid.appendChild(fx);
-  block.appendChild(grid);
+  body.appendChild(grid);
 
   if (card.kind === 'npc') {
     const tgrid = el('div', { class: 'grid2' });
@@ -408,19 +541,20 @@ function cardEditor(card, idx) {
     const th = el('div'); th.appendChild(el('label', {}, 'How many squares tall?'));
     th.appendChild(bindNum(el('input', { type: 'number', min: 1, max: 50 }), card, 'token_h'));
     tgrid.appendChild(tw); tgrid.appendChild(th);
-    block.appendChild(tgrid);
+    body.appendChild(tgrid);
   }
 
-  block.appendChild(el('label', {}, 'Private notes (only you see these — never shown to players)'));
-  block.appendChild(bind(el('textarea', { maxlength: 8000, placeholder: 'Secrets, stat ideas, motivations, what sets things off…' }), card, 'notes'));
+  body.appendChild(el('label', {}, 'Private notes (only you see these — never shown to players)'));
+  body.appendChild(attachExpand(bind(el('textarea', { maxlength: 8000, placeholder: 'Secrets, stat ideas, motivations, what sets things off…' }), card, 'notes'),
+    () => `Private notes — ${card.name || KINDS[card.kind].label}`));
 
-  block.appendChild(imageReqList(card, card.kind === 'npc'
+  body.appendChild(imageReqList(card, card.kind === 'npc'
     ? 'Describe a picture of this character or monster (optional).'
     : 'Describe a picture for this card (optional).'));
 
   const t = terms(card.kind);
-  block.appendChild(el('h3', { style: 'margin-top:16px' }, card.kind === 'story' ? 'Chapters & scenes' : 'Sections & entries'));
-  block.appendChild(el('div', { class: 'muted small', style: 'margin:-2px 0 6px' },
+  body.appendChild(el('h3', { style: 'margin-top:16px' }, card.kind === 'story' ? 'Chapters & scenes' : 'Sections & entries'));
+  body.appendChild(el('div', { class: 'muted small', style: 'margin:-2px 0 6px' },
     card.kind === 'story'
       ? 'Lay out your story here — chapters, with the scenes inside them in the order they happen.'
       : `Optional. Extra details about this ${card.kind === 'npc' ? 'character or monster' : 'place'} that you can show a little at a time.`));
@@ -430,9 +564,14 @@ function cardEditor(card, idx) {
     card.sections.forEach((s, i) => secs.appendChild(sectionEditor(card, s, i, redrawSecs, t)));
   }
   redrawSecs();
-  block.appendChild(secs);
-  block.appendChild(el('button', { class: 'tiny', onclick() { card.sections.push(newSection()); redrawSecs(); scheduleSave(); } }, `+ ${t.sec}`));
+  body.appendChild(secs);
+  body.appendChild(el('button', { class: 'tiny', onclick() { card.sections.push(newSection()); redrawSecs(); scheduleSave(); } }, `+ ${t.sec}`));
+  block.appendChild(body);
 
+  const { caret, summary } = collapsible(block, head, body, card,
+    () => card.name || `(unnamed ${KINDS[card.kind].label.toLowerCase()})`);
+  head.insertBefore(caret, head.firstChild);
+  head.insertBefore(summary, btnRow);
   return block;
 }
 
@@ -456,6 +595,12 @@ function renderCards() {
   }
   doc.cards.forEach((c, i) => host.appendChild(cardEditor(c, i)));
   $('card-count').textContent = doc.cards.length ? `(${doc.cards.length})` : '';
+  $('collapse-controls').style.display = doc.cards.length > 1 ? '' : 'none';
+}
+
+function setAllCollapsed(v) {
+  doc.cards.forEach((c) => { c._collapsed = v; });
+  renderCards(); scheduleSave();
 }
 
 function renderAll() {
@@ -526,8 +671,15 @@ function clamp(v, lo, hi, dflt) { const n = parseInt(v, 10); return Number.isFin
 // ---- export / import / text ------------------------------------------------
 function exportPack() {
   const out = JSON.parse(JSON.stringify(doc));
-  // Drop the internal _id addressing — it's for the in-page helper only.
-  (out.cards || []).forEach((c) => { delete c._id; (c.sections || []).forEach((s) => { delete s._id; (s.entries || []).forEach((e) => delete e._id); }); });
+  // Drop internal-only fields: _id addressing for the helper, and the _collapsed
+  // fold state for the editor. Neither belongs in the exported pack.
+  (out.cards || []).forEach((c) => {
+    delete c._id; delete c._collapsed;
+    (c.sections || []).forEach((s) => {
+      delete s._id; delete s._collapsed;
+      (s.entries || []).forEach((e) => { delete e._id; delete e._collapsed; });
+    });
+  });
   out.created = new Date().toISOString();
   out.generated_by = 'Campfire Saga Story Arc Builder';
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
@@ -816,6 +968,19 @@ function refreshHelperUI() {
 // ---- wire up ---------------------------------------------------------------
 $('arc-title').addEventListener('input', () => { doc.title = $('arc-title').value; scheduleSave(); });
 $('arc-notes').addEventListener('input', () => { doc.notes = $('arc-notes').value; scheduleSave(); });
+
+// Give the big-picture notes a full-screen editor too. It's a static field, so
+// we wrap it in place: attachExpand builds the .ta-wrap around the textarea, and
+// we drop that wrapper where the textarea used to sit.
+(function () {
+  const ta = $('arc-notes');
+  const next = ta.nextSibling, parent = ta.parentNode;
+  const wrap = attachExpand(ta, () => `Big-picture notes${doc.title ? ' — ' + doc.title : ''}`);
+  parent.insertBefore(wrap, next);
+})();
+
+$('collapse-all').addEventListener('click', () => setAllCollapsed(true));
+$('expand-all').addEventListener('click', () => setAllCollapsed(false));
 
 document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
   doc.cards.push(newCard(b.getAttribute('data-add')));
