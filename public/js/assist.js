@@ -118,14 +118,21 @@ function activityStart(boxId, name, args) {
   if (box.querySelector('.muted')) box.innerHTML = '';
   const d = describeTool(name, args);
   const card = document.createElement('div');
-  card.className = 'act-card';
+  card.className = 'act-card working';
   card.innerHTML =
     `<span class="act-ico">${d.icon}</span>` +
     `<div class="act-body">` +
     `<div class="act-title">${esc(d.title)}</div>` +
     (d.detail ? `<div class="act-detail">${esc(d.detail)}</div>` : '') +
-    `<div class="act-status">working…</div>` +
+    `<div class="act-status"><span class="act-spin"></span>working<span class="dots"></span></div>` +
     `</div>`;
+  // Image generation is the slow one — show a shimmering placeholder where the
+  // picture will land, so it's obvious something is still cooking.
+  if (name === 'generate_image') {
+    const sk = document.createElement('div');
+    sk.className = 'act-skeleton';
+    card.querySelector('.act-body').appendChild(sk);
+  }
   box.appendChild(card);
   follow(boxId);
   return { boxId, card };
@@ -134,6 +141,9 @@ function activityStart(boxId, name, args) {
 function activityResolve(handle, name, args, result) {
   if (!handle) return;
   const { boxId, card } = handle;
+  card.classList.remove('working'); // stops the spinner/dots
+  const sk = card.querySelector('.act-skeleton');
+  if (sk) sk.remove();
   const status = card.querySelector('.act-status');
   if (result && result.error) {
     card.classList.add('err');
