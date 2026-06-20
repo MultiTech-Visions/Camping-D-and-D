@@ -650,12 +650,15 @@ function normalize(d) {
     card.bg_effect = EFFECTS.includes(c.bg_effect) ? c.bg_effect : 'embers';
     card.token_w = clamp(c.token_w, 1, 50, 1); card.token_h = clamp(c.token_h, 1, 50, 1);
     card.image_requests = reqs(c.image_requests);
+    if (c._collapsed) card._collapsed = true; // remembered fold state (never exported)
     card.sections = (Array.isArray(c.sections) ? c.sections : []).map((s) => Object.assign(newSection(), {
       title: str(s.title), image_requests: reqs(s.image_requests),
+      _collapsed: !!s._collapsed,
       entries: (Array.isArray(s.entries) ? s.entries : []).map((e) => Object.assign(newEntry(), {
         label: str(e.label), text: str(e.text),
         reveal_live: e.reveal_live === undefined ? true : !!e.reveal_live,
         image_requests: reqs(e.image_requests),
+        _collapsed: !!e._collapsed,
       })),
     }));
     return card;
