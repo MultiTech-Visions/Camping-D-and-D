@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/css/app.css?v=4">
 <style>
   /* This is the Pi's own glanceable sign — big, readable from across the room. */
-  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; max-width: 1280px; margin: 0 auto; }
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; max-width: 1200px; margin: 0 auto; }
   .qr-card { text-align: center; padding: 22px; }
   .qr-card .qr { display: inline-block; background: #fff; padding: 14px; border-radius: 12px; margin: 12px 0; }
   .qr-card .big { font-size: 1.5rem; }
@@ -38,10 +38,6 @@
       <h2 style="margin-top:0;border:none">3 · GM screen</h2>
       <div id="gm-area"><p class="muted">checking…</p></div>
     </div>
-    <div class="card qr-card">
-      <h2 style="margin-top:0;border:none">4 · Display on a TV</h2>
-      <div id="display-area"><p class="muted">checking…</p></div>
-    </div>
   </div>
 
   <div class="card">
@@ -54,6 +50,7 @@
     <a href="/assist"><button class="ghost">🪄 Campaign assistant (needs internet)</button></a>
     <a href="/learn"><button class="ghost">📖 How to play</button></a>
   </div>
+  <p class="url-line" id="display-url" style="text-align:center;margin-top:6px">…</p>
 </div>
 <script src="/vendor/qrcode.min.js"></script>
 <script src="/js/status.js"></script>

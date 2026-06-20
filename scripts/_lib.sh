@@ -80,6 +80,5 @@ print_urls() {
   echo -e "      GM screen ${GREEN}http://$ip:3001/dm${RESET}"
   echo -e "      learn     ${GREEN}http://$ip:3000/learn${RESET}"
   echo -e "      projector ${GREEN}http://localhost:3000/display${RESET} (on the Pi itself)"
-  echo -e "      display→TV ${GREEN}http://$ip:3000/display${RESET} (point a TV/browser here)"
   echo
 }
