@@ -239,7 +239,7 @@ async function startVoice() {
       // session.update (the beta interface didn't); without it the server rejects
       // the event with "Missing required parameter: 'session.type'". Voice is set
       // here (before any audio) since it can't be changed once the model has
-      // spoken; speed/temperature/turn-taking can be changed live afterward.
+      // spoken; speed/turn-taking can be changed live afterward.
       dc.send(JSON.stringify({
         type: 'session.update',
         session: {
@@ -249,7 +249,6 @@ async function startVoice() {
             output: { voice: settings.voice, speed: settings.speed },
             input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
           },
-          temperature: settings.temperature,
         },
       }));
     });
@@ -353,9 +352,9 @@ const SETTINGS_KEY = 'assist.voiceSettings';
 let voiceCfg = null; // { voices, ranges, defaults }
 let settings = null; // current effective settings
 
+// NB: temperature is intentionally absent — the GA realtime API removed it.
 const RANGE_FIELDS = [
   { key: 'speed', id: 'set-speed', fmt: (v) => v.toFixed(2) + '×' },
-  { key: 'temperature', id: 'set-temp', fmt: (v) => v.toFixed(2) },
   { key: 'silence_ms', id: 'set-silence', fmt: (v) => (v / 1000).toFixed(2) + 's' },
 ];
 
@@ -383,7 +382,6 @@ function liveUpdateSettings() {
         output: { speed: settings.speed },
         input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
       },
-      temperature: settings.temperature,
     },
   }));
 }
@@ -395,8 +393,8 @@ async function initSettings() {
   } catch {
     voiceCfg = {
       voices: ['marin', 'cedar', 'alloy'],
-      ranges: { speed: { min: 0.25, max: 1.5, step: 0.05 }, temperature: { min: 0.6, max: 1.2, step: 0.05 }, silence_ms: { min: 200, max: 1500, step: 50 } },
-      defaults: { voice: 'marin', speed: 1.0, temperature: 0.8, silence_ms: 500 },
+      ranges: { speed: { min: 0.25, max: 1.5, step: 0.05 }, silence_ms: { min: 200, max: 1500, step: 50 } },
+      defaults: { voice: 'marin', speed: 1.0, silence_ms: 500 },
     };
   }
   settings = { ...voiceCfg.defaults, ...readStored() };

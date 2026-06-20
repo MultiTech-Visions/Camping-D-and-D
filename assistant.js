@@ -198,9 +198,10 @@ const TOOL_DEFS = [
 // Realtime API bounds; the client builds its sliders from SETTING_RANGES (served
 // by GET /assist/config) and we re-clamp here so a hand-crafted request can't
 // push an out-of-range value at OpenAI.
+// NB: the GA realtime API removed `temperature` entirely (the model runs at a
+// fixed optimal value; low temps cause audio artifacts), so it is NOT tunable.
 const SETTING_RANGES = {
   speed: { min: 0.25, max: 1.5, step: 0.05 },        // audio.output.speed
-  temperature: { min: 0.6, max: 1.2, step: 0.05 },   // realtime temperature bounds
   silence_ms: { min: 200, max: 1500, step: 50 },     // turn_detection.silence_duration_ms
 };
 
@@ -214,7 +215,6 @@ function defaultSettings() {
   return {
     voice: config.ASSISTANT.REALTIME_VOICE,
     speed: config.ASSISTANT.REALTIME_SPEED,
-    temperature: config.ASSISTANT.REALTIME_TEMPERATURE,
     silence_ms: config.ASSISTANT.REALTIME_SILENCE_MS,
   };
 }
@@ -225,7 +225,6 @@ function sanitizeSettings(raw) {
   return {
     voice: config.ASSISTANT.REALTIME_VOICES.includes(s.voice) ? s.voice : d.voice,
     speed: clamp(s.speed, d.speed, SETTING_RANGES.speed),
-    temperature: clamp(s.temperature, d.temperature, SETTING_RANGES.temperature),
     silence_ms: Math.round(clamp(s.silence_ms, d.silence_ms, SETTING_RANGES.silence_ms)),
   };
 }
@@ -241,7 +240,6 @@ function realtimeSession(settings) {
       output: { voice: settings.voice, speed: settings.speed },
       input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
     },
-    temperature: settings.temperature,
     tools: TOOL_DEFS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
     tool_choice: 'auto',
   };
@@ -419,7 +417,7 @@ function mount(app, { broadcast, log }) {
   // Mint a short-lived ephemeral token for the browser's WebRTC Realtime session.
   // The real key never reaches the browser. Tools + instructions + the GM's voice
   // settings are baked into the session here; the client also re-asserts them on
-  // connect (belt + braces) and can live-update speed/temperature/turn-taking.
+  // connect (belt + braces) and can live-update speed/turn-taking.
   app.post('/assist/session', json, async (req, res) => {
     try {
       const settings = sanitizeSettings(req.body && req.body.settings);
