@@ -114,6 +114,10 @@
   .chat-input input { flex: 1; }
   .helper details { margin-top: 8px; }
   .helper summary { cursor: pointer; color: var(--ink-dim); font-size: .82rem; }
+  .autonomy { margin: 2px 0 12px; }
+  input[type=range] { width: 100%; background: transparent; border: none; padding: 0; accent-color: var(--ember); cursor: pointer; }
+  .autonomy-ends { display: flex; justify-content: space-between; gap: 8px; font-size: .74rem; color: var(--ink-dim); margin-top: 2px; }
+  .autonomy-ends .autonomy-now { color: var(--gold); font-weight: 700; text-align: center; }
   .voice-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .voice-state { display: inline-block; border-radius: 999px; padding: 3px 12px; font-size: .78rem;
     border: 1px solid var(--line); background: var(--bg-raised); color: var(--ink-dim); }
@@ -231,6 +235,15 @@
     </div>
 
     <div id="helper-chat" style="display:none">
+      <div class="autonomy">
+        <label style="margin:0 0 4px">How much should the helper fill in for you?</label>
+        <input type="range" id="autonomy" min="0" max="4" step="1" value="2">
+        <div class="autonomy-ends">
+          <span>← I'll fill it in (it asks me)</span>
+          <span class="autonomy-now" id="autonomy-now">Balanced</span>
+          <span>Take the wheel →</span>
+        </div>
+      </div>
       <div class="voice-bar">
         <button class="primary" id="voice-start" type="button">🎙 Start talking</button>
         <button class="ghost" id="voice-stop" type="button" disabled>Stop</button>
@@ -881,7 +894,7 @@ function helperExec(name, a) {
   return { error: 'unknown tool ' + name };
 }
 
-const HELPER_SYSTEM = `You are a warm, encouraging co-writer helping a busy game master (GM) plan a tabletop RPG campaign. They are exhausted and short on time, so DO THE HEAVY LIFTING: when they share an idea, BUILD it with the tools instead of just describing it. Make confident, concrete choices; they can tweak anything afterward. Keep your chat replies short and kind — never pressure them.
+const HELPER_SYSTEM_BASE = `You are a warm, encouraging co-writer helping a game master (GM) plan a tabletop RPG campaign. Keep your chat replies short and kind — never pressure them. Always BUILD with the tools rather than only describing ideas in chat — the tools are the only way anything reaches their campaign.
 
 The campaign is made of CARDS, three kinds:
 • "story" — a story beat: its sections are CHAPTERS and its entries are SCENES, told in order.
@@ -891,10 +904,41 @@ A card has a name, a short subtitle, GM-only NOTES (only the GM sees these — p
 
 PICTURES: You cannot make images. Where art helps, attach an image_prompts description (vivid; shape "portrait" for characters, "wide" for places/scenes). The GM creates the real art later from these.
 
-HOW TO WORK: Call get_campaign first to see what's there. Ask at most ONE quick question only if you truly need direction; otherwise build with sensible assumptions. From a short idea, create a few NPCs, a location or two, and a story arc of several chapters with a few scenes each. Give every NPC a portrait description and every location a scene description. Put secrets and running advice in notes. Make several tool calls, then briefly tell the GM what you built and offer to do more. Above all, make it feel effortless for them.`;
+HOW TO WORK: Call get_campaign first to see what's already there. When the GM gives you specifics, capture their own words faithfully. Make your tool calls, then briefly tell the GM what you did and offer to keep going.`;
+
+// The autonomy dial is purely a self-imposed stance baked into the prompt (not an
+// API setting). It slides from "I'll drive — ask me" up to "take the wheel — just
+// run with it", changing how much the helper invents vs. asks. Index 0..4.
+const AUTONOMY = [
+  { label: 'Manual — ask me', prompt:
+    `AUTONOMY: MANUAL. The GM wants to drive. Do NOT invent plot, names, characters, places, or details on your own. Treat yourself as a hands-free notebook: take down the GM's own words and put them into the right cards, sections, and entries, staying as close to their wording as you can. When anything is unclear or missing, ASK the GM instead of guessing — one focused question at a time. Add only what they actually give you; do not flesh things out unprompted.` },
+  { label: 'Mostly manual', prompt:
+    `AUTONOMY: LOW. Follow the GM's lead and wording. Capture what they give you and fill in only small, obvious connective details. Whenever a real creative choice comes up (a name, a motive, a twist), ASK a quick question rather than deciding it yourself.` },
+  { label: 'Balanced', prompt:
+    `AUTONOMY: BALANCED. Build out what the GM gives you and add reasonable supporting detail to make it usable, but check in on the bigger creative choices. Ask a question when a decision genuinely matters; otherwise make a sensible choice and briefly say what you picked so they can change it.` },
+  { label: 'Proactive', prompt:
+    `AUTONOMY: HIGH. Take initiative. From a short idea, confidently flesh out cards, characters, locations, and scenes with concrete choices. Ask at most one question, and only if you're truly stuck; otherwise proceed and tell the GM what you decided so they can tweak it.` },
+  { label: 'Take the wheel', prompt:
+    `AUTONOMY: FULL. Run with it. Treat any idea as a green light to build a rich, complete draft: several NPCs, a location or two, and a multi-chapter story arc with scenes, plus picture descriptions and GM notes throughout. Do NOT ask questions — make every creative decision yourself and present a finished result for the GM to edit. Bias hard toward doing more.` },
+];
+const AUTONOMY_STORE = 'campfire-arc-helper-autonomy';
+function getAutonomy() {
+  try { const v = parseInt(localStorage.getItem(AUTONOMY_STORE), 10); return Number.isFinite(v) ? Math.min(4, Math.max(0, v)) : 2; }
+  catch (e) { return 2; }
+}
+function composeSystem() { return HELPER_SYSTEM_BASE + '\n\n' + AUTONOMY[getAutonomy()].prompt; }
+function setAutonomy(v) {
+  v = Math.min(4, Math.max(0, v | 0));
+  try { localStorage.setItem(AUTONOMY_STORE, String(v)); } catch (e) { /* private mode */ }
+  // Apply live: refresh the typed conversation's system message and, if a voice
+  // session is open, re-assert the new instructions over the data channel.
+  if (helperMessages) helperMessages[0] = { role: 'system', content: composeSystem() };
+  if (voiceLive && voiceDc) voiceDc.send(JSON.stringify({ type: 'session.update',
+    session: { type: 'realtime', instructions: composeSystem(), tools: REALTIME_TOOLS, tool_choice: 'auto' } }));
+}
 
 let helperMessages = null;
-function resetHelperConvo() { helperMessages = [{ role: 'system', content: HELPER_SYSTEM }]; }
+function resetHelperConvo() { helperMessages = [{ role: 'system', content: composeSystem() }]; }
 
 function chatBubble(who, text, cls) {
   const log = $('chat-log'); if (log.querySelector('.muted')) log.innerHTML = '';
@@ -924,6 +968,9 @@ function friendlyErr(m) {
   if (/api key|invalid|incorrect|401|unauthor/i.test(s)) return 'That code didn’t work — double-check what you pasted (Change code below).';
   if (/model/i.test(s) && /not found|does not exist|access/i.test(s)) return 'That model isn’t available on this code. Open Advanced and try another (e.g. gpt-4o).';
   if (/Failed to fetch|NetworkError|Load failed/i.test(s)) return 'Couldn’t reach the helper. Check your internet connection, then try again.';
+  if (/Permission denied|NotAllowed|not allowed|secure context|Only secure|getUserMedia/i.test(s))
+    return 'Microphone blocked. Voice needs https:// (or localhost) AND mic permission — make sure the page isn’t on plain http or a file, then allow the mic when your browser asks.';
+  if (/NotFound|device not found|Requested device/i.test(s)) return 'No microphone found — check your device’s mic, then try again.';
   return s;
 }
 
@@ -1004,7 +1051,7 @@ const getRtModel = () => { try { return localStorage.getItem(RT_MODEL_STORE) || 
 // Realtime wants flat tool defs; our HELPER_TOOLS nest them under .function.
 const REALTIME_TOOLS = HELPER_TOOLS.map((t) => ({ type: 'function', name: t.function.name, description: t.function.description, parameters: t.function.parameters }));
 
-let pc = null, micStream = null, voiceLive = false;
+let pc = null, micStream = null, voiceLive = false, voiceDc = null;
 const liveVoiceText = {}; // streamed assistant transcript, keyed by response/item id
 
 function setVoiceState(label, live) {
@@ -1017,6 +1064,14 @@ function setVoiceState(label, live) {
 async function startVoice() {
   const key = getKey();
   if (!key) { alert('Turn on the helper first (paste your code above).'); return; }
+  // Microphones only work in a secure context. Opened over file:// or plain
+  // http:// (e.g. a LAN IP), the browser blocks the mic — explain that up front
+  // instead of letting getUserMedia throw a cryptic "Permission denied".
+  if (!window.isSecureContext || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+    setVoiceState('voice off');
+    chatBubble('Helper', '⚠ Voice needs a secure connection. Your browser only allows the microphone when this page is opened over https:// (or from http://localhost) — not from a file or a plain http address. Typing here still works exactly the same; or open this page over https and the mic will work.');
+    return;
+  }
   $('voice-start').disabled = true;
   setVoiceState('connecting…');
   try {
@@ -1027,7 +1082,7 @@ async function startVoice() {
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ session: {
         type: 'realtime', model: getRtModel(),
-        instructions: HELPER_SYSTEM,
+        instructions: composeSystem(),
         audio: { output: { voice: REALTIME_VOICE } },
         tools: REALTIME_TOOLS, tool_choice: 'auto',
       } }),
@@ -1044,13 +1099,14 @@ async function startVoice() {
     for (const track of micStream.getTracks()) pc.addTrack(track, micStream);
 
     const dc = pc.createDataChannel('oai-events');
+    voiceDc = dc;
     dc.addEventListener('open', () => {
       voiceLive = true;
       setVoiceState('listening — just talk', true);
       // Re-assert instructions + tools on connect (the GA API needs session.type
       // on every session.update).
       dc.send(JSON.stringify({ type: 'session.update',
-        session: { type: 'realtime', instructions: HELPER_SYSTEM, tools: REALTIME_TOOLS, tool_choice: 'auto' } }));
+        session: { type: 'realtime', instructions: composeSystem(), tools: REALTIME_TOOLS, tool_choice: 'auto' } }));
     });
     dc.addEventListener('message', (e) => handleVoiceEvent(dc, JSON.parse(e.data)));
 
@@ -1073,6 +1129,7 @@ async function startVoice() {
 function stopVoice() {
   if (pc) { try { pc.close(); } catch (e) { /* already closed */ } pc = null; }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  voiceDc = null;
   voiceLive = false;
   setVoiceState('voice off');
   $('voice-start').disabled = false;
@@ -1175,6 +1232,12 @@ $('chat-form').addEventListener('submit', (e) => {
 $('voice-start').addEventListener('click', startVoice);
 $('voice-stop').addEventListener('click', stopVoice);
 window.addEventListener('beforeunload', () => { if (voiceLive) stopVoice(); });
+
+const autoSlider = $('autonomy');
+function updateAutonomyLabel() { $('autonomy-now').textContent = AUTONOMY[getAutonomy()].label; }
+autoSlider.value = String(getAutonomy());
+updateAutonomyLabel();
+autoSlider.addEventListener('input', () => { setAutonomy(parseInt(autoSlider.value, 10)); updateAutonomyLabel(); });
 
 window.addEventListener('beforeunload', save);
 
