@@ -76,10 +76,10 @@ print_urls() {
   [ -n "$ip" ] || ip="<this-pi's-ip>"
   echo
   echo -e "${BOLD}   Point phones (on the same WiFi) at:${RESET}"
-  echo -e "      players   ${GREEN}https://$ip:3000/${RESET}"
+  echo -e "      players   ${GREEN}http://$ip:3000/${RESET}"
   echo -e "      GM screen ${GREEN}https://$ip:3001/dm${RESET}"
-  echo -e "      learn     ${GREEN}https://$ip:3000/learn${RESET}"
-  echo -e "      projector ${GREEN}https://localhost:3000/display${RESET} (on the Pi itself)"
-  echo -e "      ${BOLD}first visit per device: tap through the one-time \"not secure\" warning (lets the mic work)${RESET}"
+  echo -e "      learn     ${GREEN}http://$ip:3000/learn${RESET}"
+  echo -e "      projector ${GREEN}http://localhost:3000/display${RESET} (on the Pi itself)"
+  echo -e "      ${BOLD}only the GM screen (https, 3001) shows a one-time \"not secure\" warning — tap through it; that's what lets the voice assistant's mic work. The player & projector links are plain http, no warning.${RESET}"
   echo
 }

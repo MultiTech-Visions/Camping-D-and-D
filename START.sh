@@ -26,8 +26,9 @@ fi
 say "Waiting for the server to answer…"
 up=0
 for _ in $(seq 1 20); do
-  # -k: the server uses a self-signed cert; -L: follow the http→https redirect.
-  curl -fsSkL --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && \
+  # Player port is plain HTTP; the GM port is HTTPS (self-signed), so for it
+  # -k trusts the cert and -L follows the http→https redirect.
+  curl -fsS  --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && \
   curl -fsSkL --max-time 1 http://localhost:3001/dm >/dev/null 2>&1 && { up=1; break; }
   sleep 0.5
 done

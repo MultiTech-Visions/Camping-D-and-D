@@ -59,13 +59,16 @@ function lanAddresses() {
 }
 
 // --- HTTPS certificate -------------------------------------------------------
-// Phones only expose the microphone (realtime voice) in a "secure context":
-// https, or http://localhost. On a LAN/hotspot IP that means we must serve
-// HTTPS. There's no public domain at a campsite, so we generate a self-signed
-// certificate (kept in the gitignored data/ dir) covering the Pi's current
-// addresses. Devices accept a one-time browser warning, then the mic works.
-// Regenerated automatically if the Pi's IPs change. openssl ships with Pi OS;
-// if it's somehow missing we fall back to plain HTTP and say so loudly.
+// Only the GM port (3001) serves HTTPS, and only because the prep-time voice
+// assistant on /assist needs the microphone — phones expose getUserMedia solely
+// in a "secure context" (https, or http://localhost), and the GM reaches /assist
+// from another device over WiFi. The player port (3000) stays plain HTTP so
+// nobody at the campsite ever meets a certificate warning for features that
+// never touch the mic. There's no public domain at a campsite, so we generate a
+// self-signed certificate (kept in the gitignored data/ dir) covering the Pi's
+// current addresses; the GM's device accepts a one-time browser warning, then the
+// mic works. Regenerated automatically if the Pi's IPs change. openssl ships with
+// Pi OS; if it's somehow missing we fall back to plain HTTP and say so loudly.
 const CERT_DIR = path.join(process.env.CAMPFIRE_DATA_DIR || path.join(__dirname, 'data'), 'tls');
 function ensureCert() {
   const keyFile = path.join(CERT_DIR, 'key.pem');
@@ -86,16 +89,16 @@ function ensureCert() {
     }
     return { key: fs.readFileSync(keyFile), cert: fs.readFileSync(certFile) };
   } catch (err) {
-    log(`WARNING: HTTPS unavailable (${err.message}). Serving plain HTTP — the microphone/voice on /assist needs HTTPS or http://localhost.`);
+    log(`WARNING: HTTPS unavailable (${err.message}). Serving the GM port as plain HTTP — the microphone/voice on /assist will only work from http://localhost.`);
     return null;
   }
 }
 
 // Serve HTTPS on `port`, and answer plain HTTP on that SAME port with a 301 to
-// https, so a phone that types http://pi:3000 still lands safely. We peek the
-// first byte of each connection — a TLS handshake starts with 0x16 — and route
-// it to the secure server or the redirect accordingly. (Falls back to plain HTTP
-// if no certificate could be made.)
+// https, so the GM typing http://pi:3001 still lands safely. We peek the first
+// byte of each connection — a TLS handshake starts with 0x16 — and route it to
+// the secure server or the redirect accordingly. Passing tls=null serves plain
+// HTTP (used for the player port, and as the fallback if no cert could be made).
 function serve(tls, app, port) {
   if (!tls) { const s = http.createServer(app); ws.attach(s, log); return s; }
   const secure = https.createServer({ key: tls.key, cert: tls.cert }, app);
@@ -184,14 +187,16 @@ gmApp.post('/upload/map',
 
 gmApp.use(express.static(PUBLIC_DIR, { index: false }));
 
-// --- HTTPS servers + WebSockets ----------------------------------------------
+// --- servers + WebSockets ----------------------------------------------------
+// HTTPS only on the GM port (for the /assist microphone); plain HTTP for players.
 const TLS = ensureCert();
-const SCHEME = TLS ? 'https' : 'http';
+const PLAYER_SCHEME = 'http';
+const GM_SCHEME = TLS ? 'https' : 'http';
 
 // Both servers share the same allClients pool inside ws.js so a GM action
 // on port 3001 immediately pushes snapshots to players on port 3000. serve()
-// attaches the WebSocket layer to each (secure) server internally.
-const playerServer = serve(TLS, playerApp, config.PORT);
+// attaches the WebSocket layer to each server internally.
+const playerServer = serve(null, playerApp, config.PORT);
 const gmServer = serve(TLS, gmApp, config.GM_PORT);
 
 // Prep-time AI campaign assistant: mounts /assist/session, /assist/tool,
@@ -210,6 +215,7 @@ gmApp.get('/status.json', (req, res) => {
     res.json({
       port: config.PORT,
       gm_port: config.GM_PORT,
+      scheme: { player: PLAYER_SCHEME, gm: GM_SCHEME },
       addresses: lanAddresses(),
       hotspot: { ...config.HOTSPOT, active: hotspotActive },
       clients,
@@ -221,14 +227,14 @@ gmApp.get('/status.json', (req, res) => {
 // --- start -------------------------------------------------------------------
 playerServer.listen(config.PORT, () => {
   log('========================================');
-  log(`Campfire Saga is burning bright (${SCHEME.toUpperCase()})`);
+  log('Campfire Saga is burning bright');
   for (const addr of lanAddresses()) {
-    log(`  players  → ${SCHEME}://${addr}:${config.PORT}/`);
-    log(`  GM       → ${SCHEME}://${addr}:${config.GM_PORT}/dm`);
-    log(`  display  → ${SCHEME}://${addr}:${config.PORT}/display`);
-    log(`  learn    → ${SCHEME}://${addr}:${config.PORT}/learn`);
+    log(`  players  → ${PLAYER_SCHEME}://${addr}:${config.PORT}/`);
+    log(`  GM       → ${GM_SCHEME}://${addr}:${config.GM_PORT}/dm`);
+    log(`  display  → ${PLAYER_SCHEME}://${addr}:${config.PORT}/display`);
+    log(`  learn    → ${PLAYER_SCHEME}://${addr}:${config.PORT}/learn`);
   }
-  if (SCHEME === 'https') log('  (first visit per device shows a one-time "not secure" warning — tap through; the mic needs this)');
+  if (GM_SCHEME === 'https') log('  (the GM port is HTTPS for the /assist mic — first visit on the GM device shows a one-time "not secure" warning; tap through. Player/display links are plain HTTP, no warning.)');
   log('========================================');
 });
 
