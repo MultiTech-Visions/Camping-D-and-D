@@ -52,7 +52,9 @@
       // --- player panel ---
       playerArea.innerHTML = '';
       if (addr) {
-        const url = `http://${addr}:${st.port}/`;
+        // The player port is plain HTTP and the GM port is HTTPS, so the QR
+        // codes use the scheme the server reports for each — not this page's.
+        const url = `${(st.scheme && st.scheme.player) || 'http'}://${addr}:${st.port}/`;
         playerArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open the game:</p>`);
         qrInto(playerArea, url, 200);
         playerArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
@@ -64,7 +66,7 @@
       gmArea.innerHTML = '';
       if (addr) {
         const gmPort = st.gm_port || (st.port + 1);
-        const url = `http://${addr}:${gmPort}/dm`;
+        const url = `${(st.scheme && st.scheme.gm) || 'https'}://${addr}:${gmPort}/dm`;
         gmArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open GM screen:</p>`);
         qrInto(gmArea, url, 200);
         gmArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);

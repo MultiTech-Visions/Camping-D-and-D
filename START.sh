@@ -26,8 +26,10 @@ fi
 say "Waiting for the server to answer…"
 up=0
 for _ in $(seq 1 20); do
-  curl -fsS --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && \
-  curl -fsS --max-time 1 http://localhost:3001/dm >/dev/null 2>&1 && { up=1; break; }
+  # Player port is plain HTTP; the GM port is HTTPS (self-signed), so for it
+  # -k trusts the cert and -L follows the http→https redirect.
+  curl -fsS  --max-time 1 http://localhost:3000/ >/dev/null 2>&1 && \
+  curl -fsSkL --max-time 1 http://localhost:3001/dm >/dev/null 2>&1 && { up=1; break; }
   sleep 0.5
 done
 [ "$up" = 1 ] || fail "server did not come up — last lines of logs/server.log:
@@ -54,7 +56,7 @@ else
 fi
 
 # --- 3. the system window -----------------------------------------------------
-STATUS_URL="http://localhost:3001/status"
+STATUS_URL="https://localhost:3001/status"
 BROWSER=""
 for candidate in chromium-browser chromium firefox; do
   command -v "$candidate" >/dev/null && { BROWSER="$candidate"; break; }
@@ -69,8 +71,10 @@ if [ -n "$BROWSER" ] && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
   if [ "$BROWSER" = "firefox" ]; then
     BROWSER_CMD=("$BROWSER" "$STATUS_URL")
   else
+    # --ignore-certificate-errors: the Pi's own kiosk trusts the self-signed cert
+    # without a blocking warning (the projector/status pages are local).
     BROWSER_CMD=("$BROWSER" --app="$STATUS_URL" --password-store=basic --no-first-run \
-      --noerrdialogs --disable-session-crashed-bubble)
+      --noerrdialogs --disable-session-crashed-bubble --ignore-certificate-errors)
   fi
   if command -v setsid >/dev/null; then
     setsid -f "${BROWSER_CMD[@]}" >/dev/null 2>&1

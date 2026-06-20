@@ -51,8 +51,21 @@ boot. START.sh when it's game time, STOP.sh when you're done.
    nobody looks at it again.
 3. On their phones, players name their device and pick **This is me** or forge a new
    hero; the GM scans the GM QR (the **/dm** screen lives on its own port — see below).
+   Players and the projector connect over plain `http://` — **no warnings, nothing to
+   tap through.**
 4. At night, HDMI into the projector and tap **"Switch this screen to the projector
    display"** on the system window (or browse to `/display`).
+
+> **The GM screen is HTTPS (and why).** Only the **GM port (3001)** serves over
+> **HTTPS**, because the prep-time **voice assistant** on `/assist` needs the
+> **microphone**, and phone browsers only allow the mic on a secure connection. With no
+> internet domain at a campsite, the Pi makes its own **self-signed certificate** on
+> first start (saved in the private `data/` folder, regenerated if its IP changes), so
+> the GM's device sees a **one-time "not secure" warning** the first time it opens the
+> GM screen — tap through it (Advanced → proceed). Typing a plain `http://…:3001`
+> address still works; it redirects to `https://`. The **player port (3000) stays plain
+> HTTP**, so nobody at the table meets a certificate warning — the mic is never used
+> there.
 
 The app runs **two web servers on one Pi**: the player side on port **3000** and the
 GM side on port **3001**. The GM URL simply doesn't serve character creation or the
