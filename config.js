@@ -41,7 +41,12 @@ module.exports = {
   //     whatever OpenAI currently documents.) ---
   ASSISTANT: {
     REALTIME_MODEL: 'gpt-realtime',     // voice model for the WebRTC session
-    REALTIME_VOICE: 'marin',            // 'marin' | 'cedar' | 'alloy' | 'echo' | ...
+    REALTIME_VOICE: 'marin',            // default voice (see REALTIME_VOICES)
+    // Voices the realtime API offers; the GM picks one in Voice settings on /assist.
+    REALTIME_VOICES: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
+    REALTIME_SPEED: 1.0,                // audio.output.speed — talking speed, 0.25..1.5
+    REALTIME_TEMPERATURE: 0.8,          // response randomness, 0.6..1.2 (realtime bounds)
+    REALTIME_SILENCE_MS: 500,           // turn_detection silence before it replies, 200..1500
     TEXT_MODEL: 'gpt-4.1',              // text-chat agent loop
     IMAGE_MODEL: 'gpt-image-1',         // image generation
     IMAGE_SIZE: '1024x1024',            // '1024x1024' | '1536x1024' | '1024x1536'

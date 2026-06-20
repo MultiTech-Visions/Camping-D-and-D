@@ -176,6 +176,60 @@ const TOOL_DEFS = [
   },
 ];
 
+// --- realtime voice settings ------------------------------------------------
+// The GM tweaks these in "Voice settings" on /assist. Ranges mirror the GA
+// Realtime API bounds; the client builds its sliders from SETTING_RANGES (served
+// by GET /assist/config) and we re-clamp here so a hand-crafted request can't
+// push an out-of-range value at OpenAI.
+const SETTING_RANGES = {
+  speed: { min: 0.25, max: 1.5, step: 0.05 },        // audio.output.speed
+  temperature: { min: 0.6, max: 1.2, step: 0.05 },   // realtime temperature bounds
+  silence_ms: { min: 200, max: 1500, step: 50 },     // turn_detection.silence_duration_ms
+};
+
+function clamp(n, fallback, { min, max }) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+
+function defaultSettings() {
+  return {
+    voice: config.ASSISTANT.REALTIME_VOICE,
+    speed: config.ASSISTANT.REALTIME_SPEED,
+    temperature: config.ASSISTANT.REALTIME_TEMPERATURE,
+    silence_ms: config.ASSISTANT.REALTIME_SILENCE_MS,
+  };
+}
+
+function sanitizeSettings(raw) {
+  const d = defaultSettings();
+  const s = raw && typeof raw === 'object' ? raw : {};
+  return {
+    voice: config.ASSISTANT.REALTIME_VOICES.includes(s.voice) ? s.voice : d.voice,
+    speed: clamp(s.speed, d.speed, SETTING_RANGES.speed),
+    temperature: clamp(s.temperature, d.temperature, SETTING_RANGES.temperature),
+    silence_ms: Math.round(clamp(s.silence_ms, d.silence_ms, SETTING_RANGES.silence_ms)),
+  };
+}
+
+// Build the GA Realtime session config from sanitized settings. Shared field
+// shape with the client's live session.update so both stay in sync.
+function realtimeSession(settings) {
+  return {
+    type: 'realtime',
+    model: config.ASSISTANT.REALTIME_MODEL,
+    instructions: SYSTEM_PROMPT,
+    audio: {
+      output: { voice: settings.voice, speed: settings.speed },
+      input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
+    },
+    temperature: settings.temperature,
+    tools: TOOL_DEFS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
+    tool_choice: 'auto',
+  };
+}
+
 // --- image generation -------------------------------------------------------
 async function generateImage(prompt, size) {
   const json = await openai('/v1/images/generations', {
@@ -335,21 +389,24 @@ function mount(app, { broadcast, log }) {
   const express = require('express');
   const json = express.json({ limit: '2mb' });
 
+  // Voice-settings metadata so the client can build its controls from the one
+  // authoritative source (the option list + ranges + current defaults).
+  app.get('/assist/config', (req, res) => {
+    res.json({
+      voices: config.ASSISTANT.REALTIME_VOICES,
+      ranges: SETTING_RANGES,
+      defaults: defaultSettings(),
+    });
+  });
+
   // Mint a short-lived ephemeral token for the browser's WebRTC Realtime session.
-  // The real key never reaches the browser. Tools + instructions are baked into
-  // the session here; the client also re-asserts them on connect (belt + braces).
+  // The real key never reaches the browser. Tools + instructions + the GM's voice
+  // settings are baked into the session here; the client also re-asserts them on
+  // connect (belt + braces) and can live-update speed/temperature/turn-taking.
   app.post('/assist/session', json, async (req, res) => {
     try {
-      const data = await openai('/v1/realtime/client_secrets', {
-        session: {
-          type: 'realtime',
-          model: config.ASSISTANT.REALTIME_MODEL,
-          instructions: SYSTEM_PROMPT,
-          audio: { output: { voice: config.ASSISTANT.REALTIME_VOICE } },
-          tools: TOOL_DEFS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
-          tool_choice: 'auto',
-        },
-      });
+      const settings = sanitizeSettings(req.body && req.body.settings);
+      const data = await openai('/v1/realtime/client_secrets', { session: realtimeSession(settings) });
       // GA returns { value, expires_at, ... }; older shape nests client_secret.
       const value = data.value || (data.client_secret && data.client_secret.value);
       if (!value) throw Object.assign(new Error('session mint returned no client secret'), { expected: true, status: 502 });
@@ -359,6 +416,7 @@ function mount(app, { broadcast, log }) {
         model: config.ASSISTANT.REALTIME_MODEL,
         instructions: SYSTEM_PROMPT,
         tools: TOOL_DEFS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
+        settings, // the clamped values actually used, so the UI can reflect them
       });
     } catch (err) {
       log(`assist/session error: ${err.message}`);
