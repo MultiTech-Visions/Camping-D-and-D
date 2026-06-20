@@ -136,6 +136,16 @@
     white-space: nowrap; font-style: italic; }
   .card-block.collapsed, .section-block.collapsed, .entry-block.collapsed { padding-bottom: 10px; }
 
+  /* Collapsed = a tidy two-line summary: the name (and, for cards, its type pill)
+     on top; the move/delete controls drop to their own line below. */
+  .collapsed .block-head { flex-wrap: wrap; }
+  .collapsed .block-head .btn-row { order: 5; flex-basis: 100%; margin-top: 8px; }
+  .card-block.collapsed .block-head .caret { order: 0; }
+  .card-block.collapsed .block-head .collapse-summary { order: 1; }
+  .card-block.collapsed .block-head .chip { order: 2; flex: 0 0 auto; }
+  .card-block.collapsed .collapse-summary { color: var(--ink); font-style: normal;
+    font-size: 1.02rem; font-weight: 600; }
+
   /* Full-screen single-field text editor — same look & feel as the GM screen.
      Flex column on the dynamic viewport height so the on-screen keyboard shrinks
      the text box, not the header; the Done button always stays reachable. */
