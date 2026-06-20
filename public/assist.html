@@ -48,6 +48,19 @@
   .act-card.err .act-status { color: var(--ember-deep); }
   .act-card img { max-width: 88px; border-radius: 6px; margin-top: 6px; display: block; }
 
+  /* "still working" indicators while a tool runs */
+  @keyframes act-spin { to { transform: rotate(360deg); } }
+  .act-spin { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px;
+    border: 2px solid var(--line); border-top-color: var(--ember); border-radius: 50%;
+    animation: act-spin 0.7s linear infinite; }
+  @keyframes act-dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+  .act-card.working .act-status .dots::after { content: ''; animation: act-dots 1.4s steps(1) infinite; }
+  /* shimmering placeholder where a generated image will land */
+  @keyframes act-shimmer { to { background-position: -200% 0; } }
+  .act-skeleton { width: 88px; height: 88px; border-radius: 6px; margin-top: 6px;
+    background: linear-gradient(110deg, #241a10 25%, #45331c 50%, #241a10 75%);
+    background-size: 200% 100%; animation: act-shimmer 1.2s linear infinite; }
+
   /* voice settings panel */
   .vset { margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-raised); padding: 0 12px; }
   .vset > summary { cursor: pointer; padding: 10px 0; font-family: 'Trebuchet MS', sans-serif; color: var(--gold); }
