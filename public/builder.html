@@ -5,19 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campfire Saga — Story Arc Builder</title>
 <!--
-  SELF-CONTAINED, OFFLINE story-arc builder.
+  SELF-CONTAINED story-arc builder — one file, no dependencies, no build step.
 
-  This one file has no dependencies and talks to no server. Email it, drop it in
-  a shared drive, save it to a phone — whoever opens it can flesh out a campaign
-  with no internet. It autosaves to the browser it's opened in, and exports a
-  "prep pack" .json file.
+  Email it, drop it in a shared drive, save it to a phone — whoever opens it can
+  flesh out a campaign. The manual form works fully OFFLINE; it autosaves to the
+  browser it's opened in and exports a "prep pack" .json file.
 
-  Back home (with internet) the GM opens /assist on the Pi and imports that pack:
-  every card becomes a real reveal card, and every IMAGE REQUEST below is sent
-  through the art generator (the "image queue") and slotted into place.
+  OPTIONAL AI HELPER: if the user pastes an OpenAI API key (stored only in their
+  browser via localStorage — NEVER embedded in this file and NEVER part of the
+  exported .json), a chat helper builds the campaign for them by calling the
+  OpenAI API straight from the page. It only writes IMAGE DESCRIPTIONS (text); it
+  never generates images. Needs internet only while chatting.
 
-  Keep it dependency-free and single-file on purpose — that's what makes it
-  shareable and offline-proof.
+  Back home, the GM imports the exported .json on the Pi: each card becomes real
+  campaign content and every image description is turned into art there.
+
+  Keep it dependency-free and single-file on purpose — that's what makes it shareable.
 -->
 <style>
   :root {
@@ -97,6 +100,20 @@
   .help ul { margin: 4px 0; padding-left: 20px; }
   .help li { margin: 4px 0; }
   .count { font-size: .72rem; color: var(--ink-dim); float: right; }
+
+  /* AI helper */
+  .helper { border-left: 4px solid var(--gold); }
+  .chat-log { height: 240px; overflow-y: auto; background: #150f0a; border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; font-size: .96rem; }
+  .msg { margin: 8px 0; line-height: 1.45; white-space: pre-wrap; }
+  .msg .who { font-family: 'Trebuchet MS', sans-serif; font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--gold); display: block; margin-bottom: 2px; }
+  .msg.user .who { color: var(--ember); }
+  .msg.act { color: var(--ink-dim); font-size: .86rem; font-style: italic; white-space: normal; }
+  .chat-input { display: flex; gap: 8px; margin-top: 8px; }
+  .chat-input input { flex: 1; }
+  .helper details { margin-top: 8px; }
+  .helper summary { cursor: pointer; color: var(--ink-dim); font-size: .82rem; }
 </style>
 </head>
 <body>
@@ -148,6 +165,39 @@
     </ul>
   </details>
 
+  <div class="panel helper" id="helper">
+    <h2 style="margin-top:0">✨ Let the helper do it for you</h2>
+    <p class="muted small">The easiest way: just tell the helper about your game in plain words — even a
+      sentence — and it fills everything in below for you. No rush at all, and nothing here can break
+      anything. Do five minutes whenever you have them; it saves as you go.</p>
+
+    <div id="helper-setup" style="display:none">
+      <label>Paste the helper code you were sent</label>
+      <div class="btn-row">
+        <input id="key-input" type="password" placeholder="Paste it here…" autocomplete="off" style="flex:1">
+        <button class="primary" id="key-save">Turn on the helper</button>
+      </div>
+      <p class="muted small">This code is saved only on this device and is <b>never</b> part of the file
+        you export or send back. (Prefer to do it by hand? Skip this and use the form below.)</p>
+      <details>
+        <summary>Advanced</summary>
+        <label>Model</label>
+        <input id="model-input" placeholder="gpt-4.1" autocomplete="off">
+      </details>
+    </div>
+
+    <div id="helper-chat" style="display:none">
+      <div class="chat-log" id="chat-log"><p class="muted">Try: “It's a pirate adventure where the crew
+        hunts a sunken crown. Give me a villain, a port town, and an opening scene.” The helper will
+        build it below — then you can keep chatting to add or change anything.</p></div>
+      <form class="chat-input" id="chat-form">
+        <input id="chat-text" placeholder="Tell the helper what you want…" autocomplete="off">
+        <button class="primary" type="submit" id="chat-send">Send</button>
+      </form>
+      <div class="muted small" id="helper-keyline" style="margin-top:6px"></div>
+    </div>
+  </div>
+
   <div class="panel">
     <label>What's your game / story called?</label>
     <input id="arc-title" maxlength="120" placeholder="e.g. The Sunken Crown">
@@ -192,17 +242,22 @@ const FORMAT = 'campfire-saga-pack';
 // never steals focus. We only re-render the tree on structural changes.
 let doc = blankDoc();
 
+// Every card/section/entry carries a transient _id so the AI helper can address
+// them precisely across turns. _id is stripped on export — it never leaves here.
+let _seq = 1;
+function nid() { return _seq++; }
+
 function blankDoc() {
   return { format: FORMAT, version: 1, title: '', notes: '', cards: [] };
 }
 function newCard(kind) {
   return {
-    kind, name: '', subtitle: '', notes: '', bg_effect: 'embers',
+    _id: nid(), kind, name: '', subtitle: '', notes: '', bg_effect: 'embers',
     token_w: 1, token_h: 1, image_requests: [], sections: [],
   };
 }
-function newSection() { return { title: '', image_requests: [], entries: [] }; }
-function newEntry() { return { label: '', text: '', reveal_live: true, image_requests: [] }; }
+function newSection() { return { _id: nid(), title: '', image_requests: [], entries: [] }; }
+function newEntry() { return { _id: nid(), label: '', text: '', reveal_live: true, image_requests: [] }; }
 function newImageReq() { return { prompt: '', size: '1024x1024' }; }
 
 // ---- tiny DOM helpers ------------------------------------------------------
@@ -404,8 +459,10 @@ function renderCards() {
 }
 
 function renderAll() {
-  bind($('arc-title'), doc, 'title');
-  bind($('arc-notes'), doc, 'notes');
+  // Arc fields are bound once (see wire-up) and always read the current `doc`,
+  // so here we just refresh their values for a freshly loaded/built campaign.
+  $('arc-title').value = doc.title || '';
+  $('arc-notes').value = doc.notes || '';
   renderCards();
 }
 
@@ -446,9 +503,9 @@ function normalize(d) {
     card.bg_effect = EFFECTS.includes(c.bg_effect) ? c.bg_effect : 'embers';
     card.token_w = clamp(c.token_w, 1, 50, 1); card.token_h = clamp(c.token_h, 1, 50, 1);
     card.image_requests = reqs(c.image_requests);
-    card.sections = (Array.isArray(c.sections) ? c.sections : []).map((s) => ({
+    card.sections = (Array.isArray(c.sections) ? c.sections : []).map((s) => Object.assign(newSection(), {
       title: str(s.title), image_requests: reqs(s.image_requests),
-      entries: (Array.isArray(s.entries) ? s.entries : []).map((e) => ({
+      entries: (Array.isArray(s.entries) ? s.entries : []).map((e) => Object.assign(newEntry(), {
         label: str(e.label), text: str(e.text),
         reveal_live: e.reveal_live === undefined ? true : !!e.reveal_live,
         image_requests: reqs(e.image_requests),
@@ -469,6 +526,8 @@ function clamp(v, lo, hi, dflt) { const n = parseInt(v, 10); return Number.isFin
 // ---- export / import / text ------------------------------------------------
 function exportPack() {
   const out = JSON.parse(JSON.stringify(doc));
+  // Drop the internal _id addressing — it's for the in-page helper only.
+  (out.cards || []).forEach((c) => { delete c._id; (c.sections || []).forEach((s) => { delete s._id; (s.entries || []).forEach((e) => delete e._id); }); });
   out.created = new Date().toISOString();
   out.generated_by = 'Campfire Saga Story Arc Builder';
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
@@ -514,7 +573,250 @@ function asPlainText() {
   return L.join('\n');
 }
 
+// ============================================================================
+// AI helper — runs entirely in this page. It talks to the OpenAI API using a
+// code the user pastes in (kept only on this device, never exported). It builds
+// the campaign with the SAME pieces as the manual form, so everything it makes
+// shows up below and can be hand-edited. It NEVER makes images — only writes the
+// picture descriptions, which get turned into art later, back home.
+// ============================================================================
+const KEY_STORE = 'campfire-arc-helper-key';
+const MODEL_STORE = 'campfire-arc-helper-model';
+const getKey = () => { try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; } };
+const getModel = () => { try { return localStorage.getItem(MODEL_STORE) || 'gpt-4.1'; } catch (e) { return 'gpt-4.1'; } };
+
+const SHAPE_SIZE = { square: '1024x1024', portrait: '1024x1536', wide: '1536x1024' };
+function toReqs(list) {
+  return (Array.isArray(list) ? list : []).map((r) => {
+    const prompt = str(r && (r.prompt || r.description)).trim();
+    const size = SHAPE_SIZE[r && r.shape] || (SIZES.some((s) => s.v === (r && r.size)) ? r.size : '1024x1024');
+    return prompt ? { prompt, size } : null;
+  }).filter(Boolean);
+}
+function findCard(id) { return doc.cards.find((c) => c._id === Number(id)); }
+
+// A compact view of the current campaign so the helper can reference things by id.
+function campaignSnapshot() {
+  return {
+    title: doc.title, notes: doc.notes,
+    cards: doc.cards.map((c) => ({
+      card_id: c._id, kind: c.kind, name: c.name, subtitle: c.subtitle, notes: c.notes,
+      bg_effect: c.bg_effect, pictures: c.image_requests.length,
+      sections: c.sections.map((s) => ({
+        section_id: s._id, title: s.title,
+        entries: s.entries.map((e) => ({ entry_id: e._id, label: e.label, text: e.text, reveal_live: e.reveal_live })),
+      })),
+    })),
+  };
+}
+
+const IMG_SCHEMA = {
+  type: 'array',
+  description: 'Optional picture descriptions to attach. You cannot create images — these are text descriptions the GM turns into art later.',
+  items: { type: 'object', properties: {
+    prompt: { type: 'string', description: 'Vivid description: subject, mood, lighting, setting, style.' },
+    shape: { type: 'string', enum: ['square', 'portrait', 'wide'], description: 'portrait for characters, wide for places/scenes' },
+  }, required: ['prompt'] },
+};
+const HELPER_TOOLS = [
+  { type: 'function', function: { name: 'get_campaign', description: 'See everything currently in the campaign (with ids). Call this first if unsure.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'set_arc', description: 'Set the campaign title and/or the GM-only overview notes.', parameters: { type: 'object', properties: { title: { type: 'string' }, notes: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'add_card', description: 'Create a card. Returns its card_id.', parameters: { type: 'object', properties: {
+    kind: { type: 'string', enum: ['story', 'npc', 'location'] },
+    name: { type: 'string' }, subtitle: { type: 'string' },
+    notes: { type: 'string', description: 'GM-only; secrets, twists, stat ideas.' },
+    bg_effect: { type: 'string', enum: EFFECTS },
+    token_w: { type: 'integer' }, token_h: { type: 'integer' }, image_prompts: IMG_SCHEMA,
+  }, required: ['kind', 'name'] } } },
+  { type: 'function', function: { name: 'update_card', description: 'Edit a card by id. Only the fields you pass change; image_prompts replaces the list.', parameters: { type: 'object', properties: {
+    card_id: { type: 'integer' }, name: { type: 'string' }, subtitle: { type: 'string' }, notes: { type: 'string' },
+    bg_effect: { type: 'string', enum: EFFECTS }, token_w: { type: 'integer' }, token_h: { type: 'integer' }, image_prompts: IMG_SCHEMA,
+  }, required: ['card_id'] } } },
+  { type: 'function', function: { name: 'delete_card', description: 'Delete a card by id.', parameters: { type: 'object', properties: { card_id: { type: 'integer' } }, required: ['card_id'] } } },
+  { type: 'function', function: { name: 'add_section', description: 'Add a section/chapter to a card. Returns section_id.', parameters: { type: 'object', properties: { card_id: { type: 'integer' }, title: { type: 'string' }, image_prompts: IMG_SCHEMA }, required: ['card_id'] } } },
+  { type: 'function', function: { name: 'add_entry', description: 'Add an entry/scene to a section. reveal_live true (default) means the GM unveils it during play. Returns entry_id.', parameters: { type: 'object', properties: {
+    card_id: { type: 'integer' }, section_id: { type: 'integer' }, label: { type: 'string' },
+    text: { type: 'string', description: 'Short, vivid, player-facing.' }, reveal_live: { type: 'boolean' }, image_prompts: IMG_SCHEMA,
+  }, required: ['card_id', 'section_id', 'text'] } } },
+  { type: 'function', function: { name: 'update_entry', description: 'Edit an entry/scene by id.', parameters: { type: 'object', properties: {
+    card_id: { type: 'integer' }, section_id: { type: 'integer' }, entry_id: { type: 'integer' },
+    label: { type: 'string' }, text: { type: 'string' }, reveal_live: { type: 'boolean' }, image_prompts: IMG_SCHEMA,
+  }, required: ['card_id', 'section_id', 'entry_id'] } } },
+];
+
+function helperExec(name, a) {
+  a = a || {};
+  const after = () => { renderAll(); scheduleSave(); };
+  if (name === 'get_campaign') return campaignSnapshot();
+  if (name === 'set_arc') {
+    if (a.title !== undefined) doc.title = str(a.title);
+    if (a.notes !== undefined) doc.notes = str(a.notes);
+    after(); return { ok: true };
+  }
+  if (name === 'add_card') {
+    if (!KINDS[a.kind]) return { error: "kind must be 'story', 'npc', or 'location'" };
+    if (!str(a.name).trim()) return { error: 'name is required' };
+    const card = newCard(a.kind);
+    card.name = str(a.name); card.subtitle = str(a.subtitle); card.notes = str(a.notes);
+    if (EFFECTS.includes(a.bg_effect)) card.bg_effect = a.bg_effect;
+    card.token_w = clamp(a.token_w, 1, 50, 1); card.token_h = clamp(a.token_h, 1, 50, 1);
+    card.image_requests = toReqs(a.image_prompts);
+    doc.cards.push(card); after(); return { card_id: card._id };
+  }
+  if (name === 'update_card') {
+    const c = findCard(a.card_id); if (!c) return { error: 'no card with that card_id' };
+    if (a.name !== undefined && str(a.name).trim()) c.name = str(a.name);
+    if (a.subtitle !== undefined) c.subtitle = str(a.subtitle);
+    if (a.notes !== undefined) c.notes = str(a.notes);
+    if (EFFECTS.includes(a.bg_effect)) c.bg_effect = a.bg_effect;
+    if (a.token_w !== undefined) c.token_w = clamp(a.token_w, 1, 50, 1);
+    if (a.token_h !== undefined) c.token_h = clamp(a.token_h, 1, 50, 1);
+    if (a.image_prompts !== undefined) c.image_requests = toReqs(a.image_prompts);
+    after(); return { ok: true };
+  }
+  if (name === 'delete_card') {
+    const i = doc.cards.findIndex((c) => c._id === Number(a.card_id));
+    if (i < 0) return { error: 'no card with that card_id' };
+    doc.cards.splice(i, 1); after(); return { ok: true };
+  }
+  if (name === 'add_section') {
+    const c = findCard(a.card_id); if (!c) return { error: 'no card with that card_id' };
+    const s = newSection(); s.title = str(a.title); s.image_requests = toReqs(a.image_prompts);
+    c.sections.push(s); after(); return { section_id: s._id };
+  }
+  if (name === 'add_entry') {
+    const c = findCard(a.card_id); if (!c) return { error: 'no card with that card_id' };
+    const s = c.sections.find((x) => x._id === Number(a.section_id)); if (!s) return { error: 'no section with that section_id on that card' };
+    if (!str(a.text).trim()) return { error: 'text is required' };
+    const e = newEntry(); e.label = str(a.label); e.text = str(a.text);
+    e.reveal_live = a.reveal_live === undefined ? true : !!a.reveal_live;
+    e.image_requests = toReqs(a.image_prompts);
+    s.entries.push(e); after(); return { entry_id: e._id };
+  }
+  if (name === 'update_entry') {
+    const c = findCard(a.card_id); if (!c) return { error: 'no card with that card_id' };
+    const s = c.sections.find((x) => x._id === Number(a.section_id)); if (!s) return { error: 'no section' };
+    const e = s.entries.find((x) => x._id === Number(a.entry_id)); if (!e) return { error: 'no entry' };
+    if (a.label !== undefined) e.label = str(a.label);
+    if (a.text !== undefined) e.text = str(a.text);
+    if (a.reveal_live !== undefined) e.reveal_live = !!a.reveal_live;
+    if (a.image_prompts !== undefined) e.image_requests = toReqs(a.image_prompts);
+    after(); return { ok: true };
+  }
+  return { error: 'unknown tool ' + name };
+}
+
+const HELPER_SYSTEM = `You are a warm, encouraging co-writer helping a busy game master (GM) plan a tabletop RPG campaign. They are exhausted and short on time, so DO THE HEAVY LIFTING: when they share an idea, BUILD it with the tools instead of just describing it. Make confident, concrete choices; they can tweak anything afterward. Keep your chat replies short and kind — never pressure them.
+
+The campaign is made of CARDS, three kinds:
+• "story" — a story beat: its sections are CHAPTERS and its entries are SCENES, told in order.
+• "npc" — a character or monster.
+• "location" — a place the party visits.
+A card has a name, a short subtitle, GM-only NOTES (only the GM sees these — put secrets, twists, and stat ideas here), and an optional background mood (one of: ${EFFECTS.join(', ')}). The body is sections, each with entries. Each entry has SHORT, vivid, PLAYER-FACING text (what the players see or hear) and a reveal_live flag (true = the GM unveils it live during play, so it starts hidden; default true and usually right for story scenes).
+
+PICTURES: You cannot make images. Where art helps, attach an image_prompts description (vivid; shape "portrait" for characters, "wide" for places/scenes). The GM creates the real art later from these.
+
+HOW TO WORK: Call get_campaign first to see what's there. Ask at most ONE quick question only if you truly need direction; otherwise build with sensible assumptions. From a short idea, create a few NPCs, a location or two, and a story arc of several chapters with a few scenes each. Give every NPC a portrait description and every location a scene description. Put secrets and running advice in notes. Make several tool calls, then briefly tell the GM what you built and offer to do more. Above all, make it feel effortless for them.`;
+
+let helperMessages = null;
+function resetHelperConvo() { helperMessages = [{ role: 'system', content: HELPER_SYSTEM }]; }
+
+function chatBubble(who, text, cls) {
+  const log = $('chat-log'); if (log.querySelector('.muted')) log.innerHTML = '';
+  const div = el('div', { class: 'msg ' + (cls || '') });
+  div.appendChild(el('span', { class: 'who' }, who));
+  const body = el('span'); body.textContent = text; div.appendChild(body);
+  log.appendChild(div); log.scrollTop = log.scrollHeight; return body;
+}
+function chatAct(text) {
+  const log = $('chat-log'); if (log.querySelector('.muted')) log.innerHTML = '';
+  const div = el('div', { class: 'msg act' }); div.textContent = text;
+  log.appendChild(div); log.scrollTop = log.scrollHeight; return div;
+}
+function actLine(name, args, result) {
+  if (result && result.error) return '⚠ ' + result.error;
+  if (name === 'add_card') return `➕ Added ${KINDS[args.kind] ? KINDS[args.kind].label : 'card'}: ${args.name || ''}`;
+  if (name === 'update_card') return '✏️ Updated a card';
+  if (name === 'delete_card') return '🗑 Removed a card';
+  if (name === 'add_section') return '📑 Added a section';
+  if (name === 'add_entry') return '• Added a scene';
+  if (name === 'update_entry') return '✏️ Updated a scene';
+  if (name === 'set_arc') return '✏️ Set the overview';
+  return null; // get_campaign etc. are silent
+}
+function friendlyErr(m) {
+  const s = String(m || '');
+  if (/api key|invalid|incorrect|401|unauthor/i.test(s)) return 'That code didn’t work — double-check what you pasted (Change code below).';
+  if (/model/i.test(s) && /not found|does not exist|access/i.test(s)) return 'That model isn’t available on this code. Open Advanced and try another (e.g. gpt-4o).';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(s)) return 'Couldn’t reach the helper. Check your internet connection, then try again.';
+  return s;
+}
+
+async function callChat() {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getKey()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: getModel(), messages: helperMessages, tools: HELPER_TOOLS, tool_choice: 'auto', temperature: 0.8 }),
+  });
+  const txt = await res.text();
+  let data = null; try { data = JSON.parse(txt); } catch (e) { /* leave null */ }
+  if (!res.ok) throw new Error((data && data.error && data.error.message) || txt || ('HTTP ' + res.status));
+  return data;
+}
+
+async function runHelper(userText) {
+  if (!helperMessages) resetHelperConvo();
+  helperMessages.push({ role: 'user', content: userText });
+  $('chat-send').disabled = true;
+  let status = chatAct('Working…');
+  try {
+    for (let turn = 0; turn < 12; turn++) {
+      const data = await callChat();
+      const msg = data.choices && data.choices[0] && data.choices[0].message;
+      if (!msg) throw new Error('no response from the helper');
+      helperMessages.push(msg);
+      if (!msg.tool_calls || !msg.tool_calls.length) {
+        if (status) { status.remove(); status = null; }
+        chatBubble('Helper', msg.content || '(done)');
+        return;
+      }
+      if (status) { status.remove(); status = null; }
+      for (const call of msg.tool_calls) {
+        let args = {}; try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) { /* empty */ }
+        const result = helperExec(call.function.name, args);
+        const line = actLine(call.function.name, args, result);
+        if (line) chatAct(line);
+        helperMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+      }
+      status = chatAct('Working…');
+    }
+    if (status) { status.remove(); status = null; }
+    chatBubble('Helper', 'That was a big batch — say “keep going” and I’ll continue.');
+  } catch (err) {
+    if (status) { status.remove(); status = null; }
+    chatBubble('Helper', '⚠ ' + friendlyErr(err.message));
+  } finally {
+    $('chat-send').disabled = false;
+    $('chat-text').focus();
+  }
+}
+
+function refreshHelperUI() {
+  const has = !!getKey();
+  $('helper-setup').style.display = has ? 'none' : '';
+  $('helper-chat').style.display = has ? '' : 'none';
+  $('model-input').value = getModel();
+  const line = $('helper-keyline'); line.innerHTML = '';
+  if (has) {
+    const a = el('a', { href: '#', onclick(e) { e.preventDefault(); $('helper-setup').style.display = ''; $('key-input').value = ''; $('key-input').focus(); } }, 'Change code');
+    line.append('Helper is on · ', a);
+  }
+}
+
 // ---- wire up ---------------------------------------------------------------
+$('arc-title').addEventListener('input', () => { doc.title = $('arc-title').value; scheduleSave(); });
+$('arc-notes').addEventListener('input', () => { doc.notes = $('arc-notes').value; scheduleSave(); });
+
 document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
   doc.cards.push(newCard(b.getAttribute('data-add')));
   renderCards(); scheduleSave();
@@ -529,13 +831,33 @@ $('copytext').addEventListener('click', async () => {
 });
 $('reset').addEventListener('click', () => {
   if (confirm('Clear everything and start over? (Export first if you want to keep it.)')) {
-    doc = blankDoc(); renderAll(); save();
+    doc = blankDoc(); resetHelperConvo(); renderAll(); save();
   }
 });
+
+$('key-save').addEventListener('click', () => {
+  const k = $('key-input').value.trim();
+  if (!k) { alert('Paste the code first.'); return; }
+  try {
+    localStorage.setItem(KEY_STORE, k);
+    const m = $('model-input').value.trim(); if (m) localStorage.setItem(MODEL_STORE, m);
+  } catch (e) { /* private mode — key just won't persist */ }
+  $('key-input').value = '';
+  refreshHelperUI();
+});
+$('chat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const t = $('chat-text').value.trim(); if (!t) return;
+  $('chat-text').value = '';
+  chatBubble('You', t, 'user');
+  runHelper(t);
+});
+
 window.addEventListener('beforeunload', save);
 
 load();
 renderAll();
+refreshHelperUI();
 </script>
 </body>
 </html>
