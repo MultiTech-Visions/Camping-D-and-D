@@ -1,12 +1,14 @@
 'use strict';
 
-// The Pi's system screen: WiFi join QR + player QR + GM QR + live connection counts.
+// The Pi's system screen: WiFi join QR + player QR + GM QR + display/TV QR
+// + live connection counts.
 // Polls /status.json; only re-renders the QR codes when something changed.
 
 (function () {
   const wifiArea = document.getElementById('wifi-area');
   const playerArea = document.getElementById('player-area');
   const gmArea = document.getElementById('gm-area');
+  const displayArea = document.getElementById('display-area');
   const who = document.getElementById('who');
   let lastKey = '';
 
@@ -69,6 +71,19 @@
         gmArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
       } else {
         gmArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
+      }
+
+      // --- display / TV panel ---
+      // The projector screen is just a web page: point any TV's browser (or a
+      // laptop on HDMI) at this URL instead of running it on the Pi itself.
+      displayArea.innerHTML = '';
+      if (addr) {
+        const url = `http://${addr}:${st.port}/display`;
+        displayArea.insertAdjacentHTML('beforeend', `<p class="big">Open this on the TV:</p>`);
+        qrInto(displayArea, url, 200);
+        displayArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
+      } else {
+        displayArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
       }
     }
 
