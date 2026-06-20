@@ -51,6 +51,8 @@ module.exports = {
     TEXT_MODEL: 'gpt-4.1',              // text-chat agent loop
     IMAGE_MODEL: 'gpt-image-1',         // image generation
     IMAGE_SIZE: '1024x1024',            // '1024x1024' | '1536x1024' | '1024x1536'
+    IMAGE_CONCURRENCY: 4,               // prep-pack import: how many images to generate at once
+    IMAGE_MAX_ATTEMPTS: 4,              // per image: tries before giving up (retries 429/5xx/network with backoff)
     MAX_TOOL_TURNS: 8,                  // cap the text agent loop so it can't spin forever
   },
 

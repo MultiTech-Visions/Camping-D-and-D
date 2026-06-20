@@ -55,7 +55,9 @@ async function openai(pathname, body) {
   try { json = JSON.parse(text); } catch { json = null; }
   if (!res.ok) {
     const reason = (json && json.error && json.error.message) || text || `HTTP ${res.status}`;
-    throw Object.assign(new Error(`OpenAI ${pathname} failed: ${reason}`), { expected: true, status: 502 });
+    // status (502) is what we report to our own browser; httpStatus is OpenAI's
+    // real code, so retry logic can tell a rate limit / 5xx from a bad request.
+    throw Object.assign(new Error(`OpenAI ${pathname} failed: ${reason}`), { expected: true, status: 502, httpStatus: res.status });
   }
   return json;
 }
@@ -261,6 +263,29 @@ async function generateImage(prompt, size) {
   return `/assets/tokens/${name}`;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// generateImage, but resilient: retry on rate limits (429), server errors (5xx),
+// and network blips with exponential backoff + jitter. A bad request (e.g. a
+// content-policy 400) is NOT retried — that would just burn time and money. onTry
+// is called before each retry so the UI can show "retrying…".
+async function generateImageWithRetry(prompt, size, onRetry) {
+  const max = config.ASSISTANT.IMAGE_MAX_ATTEMPTS || 4;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await generateImage(prompt, size);
+    } catch (err) {
+      const code = err.httpStatus;
+      const retryable = code === 429 || (code >= 500 && code <= 599) ||
+        (code === undefined && err.status === undefined); // undefined both = network/fetch error
+      if (!retryable || attempt >= max) throw err;
+      const wait = Math.min(30000, 1000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500); // 1s,2s,4s… + jitter
+      if (typeof onRetry === 'function') onRetry({ attempt, wait_ms: wait, error: err.message });
+      await sleep(wait);
+    }
+  }
+}
+
 // --- prep-pack import (the "upload at home" path) ---------------------------
 // A friend/co-GM builds a campaign offline in public/builder.html and exports a
 // "prep pack" JSON (cards + sections + scenes + text-only IMAGE REQUESTS). Here,
@@ -285,68 +310,113 @@ async function importPack(pack, { broadcast, onProgress }) {
 
   const summary = { cards_created: 0, images_made: 0, image_errors: [] };
 
-  // Generate every prompt in a request list, in order, returning the asset
-  // paths that succeeded. Failures are logged into the summary and skipped.
-  async function runRequests(list, where) {
-    const out = [];
+  // We don't generate images one-at-a-time down the file — for a big pack that's
+  // dozens of minutes of dead waiting. Instead we (1) create every card shell and
+  // collect ALL image requests into a flat job list, each pointing at the slot it
+  // should fill, then (2) run those jobs through a small concurrency pool (with
+  // per-image retry/backoff), and (3) fill each card in the moment its last image
+  // lands. Cards therefore appear on /dm immediately as shells and fill in live.
+  const jobs = [];      // { prompt, size, where, slot, ctx }
+  const records = [];   // per-card: { id, card, kind, name, cardSlots, sections, ctx }
+
+  // Reserve an ordered array of slots for one request list (preserves slideshow
+  // order even though images resolve out of order), and enqueue a job per slot.
+  function queue(list, where, ctx) {
+    const slots = [];
     for (const req of (Array.isArray(list) ? list : [])) {
       const prompt = req && typeof req.prompt === 'string' ? req.prompt.trim() : '';
       if (!prompt) continue;
-      emit({ stage: 'image', where, prompt });
-      try {
-        const image_path = await generateImage(prompt, req.size);
-        out.push(image_path);
-        summary.images_made++;
-        emit({ stage: 'image_done', where, image_path });
-      } catch (err) {
-        summary.image_errors.push({ where, prompt, error: err.message });
-        emit({ stage: 'image_error', where, prompt, error: err.message });
-      }
+      const slot = { path: null };
+      slots.push(slot);
+      ctx.remaining++;
+      jobs.push({ prompt, size: req && req.size, where, slot, ctx });
     }
-    return out;
+    return slots;
   }
+  const paths = (slots) => slots.map((s) => s.path).filter(Boolean); // drop slots that failed
 
+  // Phase 1: create shells + collect jobs (synchronous, fast, no network).
   for (const card of cards) {
     const kind = card && card.kind;
     const name = card && card.name;
     emit({ stage: 'card', name: name || '(unnamed)', kind });
     const { created_card_id: id } = ops['card.create']({ kind, name });
+    summary.cards_created++;
     broadcast();
 
-    const cardImages = await runRequests(card.image_requests, `card "${name}"`);
-
+    const ctx = { id, name, remaining: 0, rec: null };
+    const cardSlots = queue(card.image_requests, `card "${name}"`, ctx);
     const sections = [];
     for (const s of (Array.isArray(card.sections) ? card.sections : [])) {
-      const secImages = await runRequests(s && s.image_requests, `chapter in "${name}"`);
+      const secSlots = queue(s && s.image_requests, `chapter in "${name}"`, ctx);
       const entries = [];
       for (const e of (Array.isArray(s && s.entries) ? s.entries : [])) {
-        const entryImages = await runRequests(e && e.image_requests, `scene in "${name}"`);
+        const entrySlots = queue(e && e.image_requests, `scene in "${name}"`, ctx);
         entries.push({
           label: (e && e.label) || '',
           text: (e && e.text) || '',
           // reveal_live (default true) means the GM unveils it during play, so it
           // starts hidden on the projector. visible is the inverse.
           visible: e && e.reveal_live === false ? true : false,
-          images: entryImages,
+          entrySlots,
         });
       }
-      sections.push({ title: (s && s.title) || '', images: secImages, entries });
+      sections.push({ title: (s && s.title) || '', secSlots, entries });
     }
+    const rec = { id, card, kind, name, cardSlots, sections, ctx };
+    ctx.rec = rec;
+    records.push(rec);
+  }
 
-    const update = { card_id: id, sections };
+  // Fill a card from its resolved slots once all its images are done (or it had
+  // none). Writes the card and broadcasts so /dm updates live.
+  function finalizeCard(rec) {
+    const card = rec.card;
+    const sections = rec.sections.map((s) => ({
+      title: s.title,
+      images: paths(s.secSlots),
+      entries: s.entries.map((e) => ({ label: e.label, text: e.text, visible: e.visible, images: paths(e.entrySlots) })),
+    }));
+    const update = { card_id: rec.id, sections };
     if (card.subtitle !== undefined) update.subtitle = String(card.subtitle);
     if (card.notes !== undefined) update.notes = String(card.notes);
     if (card.bg_effect && config.NPC_EFFECTS.includes(card.bg_effect)) update.bg_effect = card.bg_effect;
-    if (cardImages.length) update.images = cardImages;
-    if (kind === 'npc') {
+    const ci = paths(rec.cardSlots);
+    if (ci.length) update.images = ci;
+    if (rec.kind === 'npc') {
       if (Number.isInteger(card.token_w)) update.token_w = card.token_w;
       if (Number.isInteger(card.token_h)) update.token_h = card.token_h;
     }
     ops['card.update'](update);
     broadcast();
-    summary.cards_created++;
-    emit({ stage: 'card_done', id, name: name || '(unnamed)' });
+    emit({ stage: 'card_done', id: rec.id, name: rec.name || '(unnamed)' });
   }
+
+  // Cards with no images at all are done already.
+  for (const rec of records) if (rec.ctx.remaining === 0) finalizeCard(rec);
+
+  // Phase 2: run the image jobs through a concurrency pool. Each worker pulls the
+  // next job; failures are logged + skipped (never sink the import); when a card's
+  // last job settles, that card is filled in.
+  let next = 0;
+  async function worker() {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      emit({ stage: 'image', where: job.where, prompt: job.prompt });
+      try {
+        job.slot.path = await generateImageWithRetry(job.prompt, job.size,
+          (info) => emit({ stage: 'image_retry', where: job.where, prompt: job.prompt, ...info }));
+        summary.images_made++;
+        emit({ stage: 'image_done', where: job.where, image_path: job.slot.path });
+      } catch (err) {
+        summary.image_errors.push({ where: job.where, prompt: job.prompt, error: err.message });
+        emit({ stage: 'image_error', where: job.where, prompt: job.prompt, error: err.message });
+      }
+      if (--job.ctx.remaining === 0) finalizeCard(job.ctx.rec);
+    }
+  }
+  const pool = Math.max(1, Math.min(config.ASSISTANT.IMAGE_CONCURRENCY || 4, jobs.length));
+  await Promise.all(Array.from({ length: pool }, worker));
 
   return summary;
 }
@@ -390,7 +460,7 @@ async function executeTool(name, args, broadcast) {
       return { ok: true };
 
     case 'generate_image': {
-      const image_path = await generateImage(a.prompt, a.size);
+      const image_path = await generateImageWithRetry(a.prompt, a.size);
       return { image_path };
     }
 
