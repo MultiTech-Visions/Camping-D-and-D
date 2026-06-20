@@ -118,14 +118,6 @@
   input[type=range] { width: 100%; background: transparent; border: none; padding: 0; accent-color: var(--ember); cursor: pointer; }
   .autonomy-ends { display: flex; justify-content: space-between; gap: 8px; font-size: .74rem; color: var(--ink-dim); margin-top: 2px; }
   .autonomy-ends .autonomy-now { color: var(--gold); font-weight: 700; text-align: center; }
-  .voice-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-  .voice-state { display: inline-block; border-radius: 999px; padding: 3px 12px; font-size: .78rem;
-    border: 1px solid var(--line); background: var(--bg-raised); color: var(--ink-dim); }
-  .voice-state.live { border-color: var(--ember); color: var(--ember); }
-  .voice-pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--ember);
-    box-shadow: 0 0 0 0 rgba(255,140,46,.6); animation: voicePulse 1.4s infinite; }
-  @keyframes voicePulse { 0% { box-shadow: 0 0 0 0 rgba(255,140,46,.55); }
-    70% { box-shadow: 0 0 0 9px rgba(255,140,46,0); } 100% { box-shadow: 0 0 0 0 rgba(255,140,46,0); } }
 
   /* Collapsible blocks — a caret folds a card / section / entry so a long
      campaign stays scannable. The head is clickable; a summary line shows
@@ -254,17 +246,9 @@
           <span>Take the wheel →</span>
         </div>
       </div>
-      <div class="voice-bar">
-        <button class="primary" id="voice-start" type="button">🎙 Start talking</button>
-        <button class="ghost" id="voice-stop" type="button" disabled>Stop</button>
-        <span class="voice-state" id="voice-state">voice off</span>
-      </div>
-      <p class="muted small" style="margin:0 0 8px">Talk hands-free — just speak and the helper builds your
-        game as you go, reading it back to you. Or type below. (Needs internet and a microphone; allow mic
-        access when your browser asks.)</p>
-      <div class="chat-log" id="chat-log"><p class="muted">Try saying or typing: “It's a pirate adventure
-        where the crew hunts a sunken crown. Give me a villain, a port town, and an opening scene.” The helper
-        will build it below — then keep talking or typing to add or change anything.</p></div>
+      <div class="chat-log" id="chat-log"><p class="muted">Try: “It's a pirate adventure where the crew
+        hunts a sunken crown. Give me a villain, a port town, and an opening scene.” The helper will
+        build it below — then you can keep chatting to add or change anything.</p></div>
       <form class="chat-input" id="chat-form">
         <input id="chat-text" placeholder="Tell the helper what you want…" autocomplete="off">
         <button class="primary" type="submit" id="chat-send">Send</button>
@@ -296,8 +280,6 @@
   <p class="muted small" style="margin-top:30px">Campfire Saga · Story Arc Builder ·
     everything stays on this device until you export it.</p>
 </div>
-
-<audio id="assistant-audio" autoplay></audio>
 
 <script>
 'use strict';
@@ -940,11 +922,8 @@ function composeSystem() { return HELPER_SYSTEM_BASE + '\n\n' + AUTONOMY[getAuto
 function setAutonomy(v) {
   v = Math.min(4, Math.max(0, v | 0));
   try { localStorage.setItem(AUTONOMY_STORE, String(v)); } catch (e) { /* private mode */ }
-  // Apply live: refresh the typed conversation's system message and, if a voice
-  // session is open, re-assert the new instructions over the data channel.
+  // Apply live: refresh the running conversation's system message.
   if (helperMessages) helperMessages[0] = { role: 'system', content: composeSystem() };
-  if (voiceLive && voiceDc) voiceDc.send(JSON.stringify({ type: 'session.update',
-    session: { type: 'realtime', instructions: composeSystem(), tools: REALTIME_TOOLS, tool_choice: 'auto' } }));
 }
 
 let helperMessages = null;
@@ -978,9 +957,6 @@ function friendlyErr(m) {
   if (/api key|invalid|incorrect|401|unauthor/i.test(s)) return 'That code didn’t work — double-check what you pasted (Change code below).';
   if (/model/i.test(s) && /not found|does not exist|access/i.test(s)) return 'That model isn’t available on this code. Open Advanced and try another (e.g. gpt-4o).';
   if (/Failed to fetch|NetworkError|Load failed/i.test(s)) return 'Couldn’t reach the helper. Check your internet connection, then try again.';
-  if (/Permission denied|NotAllowed|not allowed|secure context|Only secure|getUserMedia/i.test(s))
-    return 'Microphone blocked. Voice needs https:// (or localhost) AND mic permission — make sure the page isn’t on plain http or a file, then allow the mic when your browser asks.';
-  if (/NotFound|device not found|Requested device/i.test(s)) return 'No microphone found — check your device’s mic, then try again.';
   return s;
 }
 
@@ -1038,152 +1014,10 @@ function refreshHelperUI() {
   $('helper-setup').style.display = has ? 'none' : '';
   $('helper-chat').style.display = has ? '' : 'none';
   $('model-input').value = getModel();
-  if (!has && voiceLive) stopVoice(); // code cleared while talking → hang up
   const line = $('helper-keyline'); line.innerHTML = '';
   if (has) {
     const a = el('a', { href: '#', onclick(e) { e.preventDefault(); $('helper-setup').style.display = ''; $('key-input').value = ''; $('key-input').focus(); } }, 'Change code');
     line.append('Helper is on · ', a);
-  }
-}
-
-// ============================================================================
-// Voice helper — the same hands-free, realtime flow as the GM's Campaign
-// Assistant, but fully self-contained. It opens a WebRTC session straight to
-// OpenAI's Realtime API from this page, authorized by the code you pasted (which
-// never leaves this device). It drives the SAME tools as the typed helper, so
-// whatever you say is built below and can be hand-edited. It never makes images.
-// ============================================================================
-const REALTIME_MODEL = 'gpt-realtime';   // voice model for the WebRTC session
-const REALTIME_VOICE = 'marin';          // 'marin' | 'cedar' | 'alloy' | 'echo' | …
-const RT_MODEL_STORE = 'campfire-arc-helper-rtmodel';
-const getRtModel = () => { try { return localStorage.getItem(RT_MODEL_STORE) || REALTIME_MODEL; } catch (e) { return REALTIME_MODEL; } };
-
-// Realtime wants flat tool defs; our HELPER_TOOLS nest them under .function.
-const REALTIME_TOOLS = HELPER_TOOLS.map((t) => ({ type: 'function', name: t.function.name, description: t.function.description, parameters: t.function.parameters }));
-
-let pc = null, micStream = null, voiceLive = false, voiceDc = null;
-const liveVoiceText = {}; // streamed assistant transcript, keyed by response/item id
-
-function setVoiceState(label, live) {
-  const pill = $('voice-state');
-  if (!pill) return;
-  pill.textContent = label;
-  pill.classList.toggle('live', !!live);
-}
-
-async function startVoice() {
-  const key = getKey();
-  if (!key) { alert('Turn on the helper first (paste your code above).'); return; }
-  // Microphones only work in a secure context. Opened over file:// or plain
-  // http:// (e.g. a LAN IP), the browser blocks the mic — explain that up front
-  // instead of letting getUserMedia throw a cryptic "Permission denied".
-  if (!window.isSecureContext || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
-    setVoiceState('voice off');
-    chatBubble('Helper', '⚠ Voice needs a secure connection. Your browser only allows the microphone when this page is opened over https:// (or from http://localhost) — not from a file or a plain http address. Typing here still works exactly the same; or open this page over https and the mic will work.');
-    return;
-  }
-  $('voice-start').disabled = true;
-  setVoiceState('connecting…');
-  try {
-    // 1) Mint a short-lived token with your code, so the code itself never rides
-    //    the WebRTC connection — the same belt-and-braces the GM screen uses.
-    const mintRes = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session: {
-        type: 'realtime', model: getRtModel(),
-        instructions: composeSystem(),
-        audio: { output: { voice: REALTIME_VOICE } },
-        tools: REALTIME_TOOLS, tool_choice: 'auto',
-      } }),
-    });
-    const sess = await mintRes.json();
-    if (!mintRes.ok) throw new Error((sess.error && sess.error.message) || ('HTTP ' + mintRes.status));
-    const clientSecret = sess.value || (sess.client_secret && sess.client_secret.value);
-    if (!clientSecret) throw new Error('the helper code couldn’t start a voice session');
-
-    pc = new RTCPeerConnection();
-    pc.ontrack = (e) => { $('assistant-audio').srcObject = e.streams[0]; };
-
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    for (const track of micStream.getTracks()) pc.addTrack(track, micStream);
-
-    const dc = pc.createDataChannel('oai-events');
-    voiceDc = dc;
-    dc.addEventListener('open', () => {
-      voiceLive = true;
-      setVoiceState('listening — just talk', true);
-      // Re-assert instructions + tools on connect (the GA API needs session.type
-      // on every session.update).
-      dc.send(JSON.stringify({ type: 'session.update',
-        session: { type: 'realtime', instructions: composeSystem(), tools: REALTIME_TOOLS, tool_choice: 'auto' } }));
-    });
-    dc.addEventListener('message', (e) => handleVoiceEvent(dc, JSON.parse(e.data)));
-
-    // 2) SDP offer/answer with OpenAI, authorized by the ephemeral token.
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const sdpRes = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(getRtModel())}`, {
-      method: 'POST', body: offer.sdp,
-      headers: { Authorization: `Bearer ${clientSecret}`, 'Content-Type': 'application/sdp' },
-    });
-    if (!sdpRes.ok) throw new Error('couldn’t connect the voice session: ' + (await sdpRes.text()));
-    await pc.setRemoteDescription({ type: 'answer', sdp: await sdpRes.text() });
-    $('voice-stop').disabled = false;
-  } catch (err) {
-    chatBubble('Helper', '⚠ ' + friendlyErr(err.message));
-    stopVoice();
-  }
-}
-
-function stopVoice() {
-  if (pc) { try { pc.close(); } catch (e) { /* already closed */ } pc = null; }
-  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-  voiceDc = null;
-  voiceLive = false;
-  setVoiceState('voice off');
-  $('voice-start').disabled = false;
-  $('voice-stop').disabled = true;
-}
-
-// Realtime events arrive on the data channel. Transcripts flow into the same
-// chat log as the typed helper; tool calls run locally through helperExec, then
-// the result is fed back so the model can keep going.
-async function handleVoiceEvent(dc, ev) {
-  const t = ev.type || '';
-
-  // Assistant speech transcript (event names have varied across versions).
-  if (t.endsWith('output_audio_transcript.delta') || t === 'response.audio_transcript.delta') {
-    const k = ev.response_id || ev.item_id || 'a';
-    if (!liveVoiceText[k]) liveVoiceText[k] = chatBubble('Helper', '');
-    liveVoiceText[k].textContent += ev.delta || '';
-    const log = $('chat-log'); log.scrollTop = log.scrollHeight;
-    return;
-  }
-  if (t.endsWith('output_audio_transcript.done') || t === 'response.audio_transcript.done') {
-    delete liveVoiceText[ev.response_id || ev.item_id || 'a'];
-    return;
-  }
-  // What you said (input transcription).
-  if (t === 'conversation.item.input_audio_transcription.completed') {
-    if (ev.transcript) chatBubble('You', ev.transcript, 'user');
-    return;
-  }
-
-  // Tool call → run it on the doc right here, then hand the result back.
-  if (t === 'response.function_call_arguments.done') {
-    let args = {}; try { args = JSON.parse(ev.arguments || '{}'); } catch (e) { /* leave empty */ }
-    const result = helperExec(ev.name, args);
-    const line = actLine(ev.name, args, result);
-    if (line) chatAct(line);
-    dc.send(JSON.stringify({ type: 'conversation.item.create',
-      item: { type: 'function_call_output', call_id: ev.call_id, output: JSON.stringify(result) } }));
-    dc.send(JSON.stringify({ type: 'response.create' }));
-    return;
-  }
-
-  if (t === 'error') {
-    chatBubble('Helper', '⚠ ' + friendlyErr((ev.error && ev.error.message) || 'voice error'));
   }
 }
 
@@ -1239,9 +1073,6 @@ $('chat-form').addEventListener('submit', (e) => {
   chatBubble('You', t, 'user');
   runHelper(t);
 });
-$('voice-start').addEventListener('click', startVoice);
-$('voice-stop').addEventListener('click', stopVoice);
-window.addEventListener('beforeunload', () => { if (voiceLive) stopVoice(); });
 
 const autoSlider = $('autonomy');
 function updateAutonomyLabel() { $('autonomy-now').textContent = AUTONOMY[getAutonomy()].label; }
