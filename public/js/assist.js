@@ -112,9 +112,12 @@ async function startVoice() {
     dc.addEventListener('open', () => {
       setVoiceState('listening', true);
       // Re-assert instructions + tools in case the mint didn't carry them.
+      // The GA Realtime API requires session.type on every session.update (the
+      // beta interface didn't); without it the server rejects the event with
+      // "Missing required parameter: 'session.type'".
       dc.send(JSON.stringify({
         type: 'session.update',
-        session: { instructions: sess.instructions, tools: sess.tools, tool_choice: 'auto' },
+        session: { type: 'realtime', instructions: sess.instructions, tools: sess.tools, tool_choice: 'auto' },
       }));
     });
     dc.addEventListener('message', (e) => handleRealtimeEvent(dc, JSON.parse(e.data)));
