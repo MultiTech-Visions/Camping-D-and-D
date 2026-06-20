@@ -51,7 +51,7 @@
       // --- player panel ---
       playerArea.innerHTML = '';
       if (addr) {
-        const url = `http://${addr}:${st.port}/`;
+        const url = `${location.protocol}//${addr}:${st.port}/`;
         playerArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open the game:</p>`);
         qrInto(playerArea, url, 200);
         playerArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
@@ -63,7 +63,7 @@
       gmArea.innerHTML = '';
       if (addr) {
         const gmPort = st.gm_port || (st.port + 1);
-        const url = `http://${addr}:${gmPort}/dm`;
+        const url = `${location.protocol}//${addr}:${gmPort}/dm`;
         gmArea.insertAdjacentHTML('beforeend', `<p class="big">Scan to open GM screen:</p>`);
         qrInto(gmArea, url, 200);
         gmArea.insertAdjacentHTML('beforeend', `<p class="url-line">${url}</p>`);
