@@ -77,6 +77,23 @@ IMAGES: To add art, call generate_image with a rich visual prompt; it returns an
 
 WORKFLOW: First call get_overview to see what already exists so you build on it and avoid duplicates. Propose a quick plan out loud, then create_card to make the shell, generate images, and update_card to fill in subtitle/notes/sections/images in one rich update. Work in small confirmable steps when the GM is steering; batch confidently when they say "just do it". Ask before deleting or overwriting substantial existing content. Be concise and evocative — you are helping tell a story.`;
 
+// Spoken-only addendum for the realtime (voice) session. Tools like card and
+// image creation take a noticeable beat, during which the model would otherwise
+// fall silent — so we follow OpenAI's realtime "preamble" guidance and have it
+// announce the work out loud before it starts. (The text chat doesn't get this:
+// it has no voice, and the on-screen activity cards already narrate it.)
+const PREAMBLE_GUIDANCE = `# Preambles
+Give a short spoken preamble right before you call a tool that takes a noticeable moment — creating or updating a card, generating an image, or making several changes in a row — so the GM always hears that work is underway and is never left in silence.
+- Keep it to one short, natural sentence (two at most before a large or destructive action). Describe the action, not your reasoning, and skip filler.
+- Vary the wording across turns. For example: "I'll sketch that NPC now." / "Let me draft the location card." / "Generating the portrait — one moment." / "I'll add those scenes to the card."
+- When you fire several tools back to back, say one brief line up front (e.g. "I'll build that out now — the card first, then the art.") and give the occasional progress update rather than narrating every single call.
+- Don't preamble when you can simply answer right away, when the GM is only confirming/correcting/declining, or when the audio is unclear or silent.
+- After the tools finish, briefly confirm what you made before moving on.`;
+
+// What the realtime session is actually instructed with: the shared system prompt
+// plus the spoken preamble rules above.
+const REALTIME_INSTRUCTIONS = `${SYSTEM_PROMPT}\n\n${PREAMBLE_GUIDANCE}`;
+
 // --- tool definitions (one source → both Chat and Realtime shapes) ----------
 // Each: { name, description, parameters(JSON Schema) }.
 const TOOL_DEFS = [
@@ -219,7 +236,7 @@ function realtimeSession(settings) {
   return {
     type: 'realtime',
     model: config.ASSISTANT.REALTIME_MODEL,
-    instructions: SYSTEM_PROMPT,
+    instructions: REALTIME_INSTRUCTIONS,
     audio: {
       output: { voice: settings.voice, speed: settings.speed },
       input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
@@ -414,7 +431,7 @@ function mount(app, { broadcast, log }) {
         client_secret: value,
         expires_at: data.expires_at || (data.client_secret && data.client_secret.expires_at) || null,
         model: config.ASSISTANT.REALTIME_MODEL,
-        instructions: SYSTEM_PROMPT,
+        instructions: REALTIME_INSTRUCTIONS,
         tools: TOOL_DEFS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
         settings, // the clamped values actually used, so the UI can reflect them
       });
