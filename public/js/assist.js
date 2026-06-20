@@ -8,6 +8,45 @@
 //             to /assist/tool. The real API key never reaches this browser.
 
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// --- auto-scroll controllers ------------------------------------------------
+// Each scrollable log gets a controller: it follows new content while pinned to
+// the bottom, but the moment the GM scrolls up to read something it stops
+// chasing — so the text holds still. Scrolling back to the bottom (or tapping
+// the toggle) re-arms it. The toggle button shows the current state.
+const scrollers = {};
+function makeAutoScroll(boxId, btnId) {
+  const box = $(boxId);
+  const btn = $(btnId);
+  let auto = true;
+  const atBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  function reflect() {
+    btn.classList.toggle('on', auto);
+    btn.textContent = auto ? '⤓ Auto-scroll: on' : '⏸ Auto-scroll: off';
+  }
+  // A programmatic scroll-to-bottom fires 'scroll' too; guard against it
+  // flipping our own state.
+  let selfScrolling = false;
+  box.addEventListener('scroll', () => {
+    if (selfScrolling) return;
+    const ab = atBottom();
+    if (ab !== auto) { auto = ab; reflect(); }
+  });
+  btn.addEventListener('click', () => {
+    auto = !auto;
+    if (auto) { selfScrolling = true; box.scrollTop = box.scrollHeight; selfScrolling = false; }
+    reflect();
+  });
+  reflect();
+  const ctl = {
+    follow() { if (auto) { selfScrolling = true; box.scrollTop = box.scrollHeight; selfScrolling = false; } },
+  };
+  scrollers[boxId] = ctl;
+  return ctl;
+}
+function follow(boxId) { if (scrollers[boxId]) scrollers[boxId].follow(); }
 
 // --- shared activity log ----------------------------------------------------
 function logActivity(name, args, result) {
@@ -39,8 +78,80 @@ function bubble(boxId, who, text, cls) {
   body.textContent = text;
   div.appendChild(body);
   box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
+  follow(boxId);
   return body; // so streaming text can append
+}
+
+// --- inline activity cards (shown in the conversation as tools fire) ---------
+// The model often works in silence (creating cards, generating art), so we narrate
+// each tool call right in the transcript: a friendly title + a human summary of
+// the arguments, never raw JSON. activityStart() drops a "working…" card the moment
+// a call begins; activityResolve() updates it to a ✓ / image / error when it lands.
+function describeTool(name, args) {
+  const a = args || {};
+  switch (name) {
+    case 'get_overview': return { icon: '👀', title: 'Reviewing the campaign so far' };
+    case 'get_card': return { icon: '🔎', title: `Reading card #${a.card_id}` };
+    case 'create_card': return { icon: '🎴', title: `Creating ${a.kind || ''} card`.trim(), detail: a.name ? `“${a.name}”` : '' };
+    case 'delete_card': return { icon: '🗑', title: `Deleting card #${a.card_id}` };
+    case 'generate_image': return { icon: '🎨', title: 'Generating image', detail: a.prompt ? `“${a.prompt}”` : '' };
+    case 'update_card': {
+      const parts = [];
+      if (a.name !== undefined) parts.push('name');
+      if (a.subtitle !== undefined) parts.push('subtitle');
+      if (a.notes !== undefined) parts.push('GM notes');
+      if (a.bg_effect) parts.push(`effect “${a.bg_effect}”`);
+      if (Array.isArray(a.images)) parts.push(`${a.images.length} image${a.images.length === 1 ? '' : 's'}`);
+      if (Array.isArray(a.sections)) {
+        const entries = a.sections.reduce((n, s) => n + ((s && s.entries && s.entries.length) || 0), 0);
+        parts.push(`${a.sections.length} section${a.sections.length === 1 ? '' : 's'}` +
+          (entries ? ` / ${entries} entr${entries === 1 ? 'y' : 'ies'}` : ''));
+      }
+      return { icon: '✏️', title: `Filling in card #${a.card_id}`, detail: parts.length ? parts.join(', ') : '' };
+    }
+    default: return { icon: '•', title: name };
+  }
+}
+
+function activityStart(boxId, name, args) {
+  const box = $(boxId);
+  if (box.querySelector('.muted')) box.innerHTML = '';
+  const d = describeTool(name, args);
+  const card = document.createElement('div');
+  card.className = 'act-card';
+  card.innerHTML =
+    `<span class="act-ico">${d.icon}</span>` +
+    `<div class="act-body">` +
+    `<div class="act-title">${esc(d.title)}</div>` +
+    (d.detail ? `<div class="act-detail">${esc(d.detail)}</div>` : '') +
+    `<div class="act-status">working…</div>` +
+    `</div>`;
+  box.appendChild(card);
+  follow(boxId);
+  return { boxId, card };
+}
+
+function activityResolve(handle, name, args, result) {
+  if (!handle) return;
+  const { boxId, card } = handle;
+  const status = card.querySelector('.act-status');
+  if (result && result.error) {
+    card.classList.add('err');
+    status.textContent = `couldn't: ${result.error}`;
+  } else {
+    card.classList.add('done');
+    if (result && result.image_path) {
+      status.textContent = 'done';
+      const img = document.createElement('img');
+      img.src = result.image_path;
+      card.querySelector('.act-body').appendChild(img);
+    } else if (result && result.created_card_id) {
+      status.textContent = `created card #${result.created_card_id}`;
+    } else {
+      status.textContent = 'done';
+    }
+  }
+  follow(boxId);
 }
 
 function showError(msg) {
@@ -69,8 +180,14 @@ $('chat-form').addEventListener('submit', async (e) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    (data.tool_log || []).forEach((t) => logActivity(t.name, t.args, t.result));
-    thinking.textContent = data.reply || '(done)';
+    // Drop the "…" placeholder, lay down a card per tool the agent ran, then the
+    // reply — so the chat reads: you → what it built → its answer.
+    thinking.parentElement.remove();
+    (data.tool_log || []).forEach((tl) => {
+      activityResolve(activityStart('chat-log', tl.name, tl.args), tl.name, tl.args, tl.result);
+      logActivity(tl.name, tl.args, tl.result); // also keep the session summary box
+    });
+    bubble('chat-log', 'Assistant', data.reply || '(done)');
     history.push({ role: 'assistant', content: data.reply || '' });
   } catch (err) {
     thinking.textContent = `⚠ ${err.message}`;
@@ -84,6 +201,7 @@ $('chat-form').addEventListener('submit', async (e) => {
 // --- voice (WebRTC realtime) ------------------------------------------------
 let pc = null;
 let micStream = null;
+let dc = null; // the open data channel, so settings changes can live-update it
 
 function setVoiceState(label, live) {
   const pill = $('voice-state');
@@ -95,8 +213,13 @@ async function startVoice() {
   $('voice-start').disabled = true;
   setVoiceState('connecting…');
   try {
-    const sess = await (await fetch('/assist/session', { method: 'POST' })).json();
+    if (!settings) await initSettings(); // make sure the GM's voice settings are loaded
+    const sess = await (await fetch('/assist/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    })).json();
     if (sess.error) throw new Error(sess.error);
+    if (sess.settings) { settings = { ...settings, ...sess.settings }; reflectSettings(); } // adopt clamped values
 
     pc = new RTCPeerConnection();
 
@@ -108,16 +231,26 @@ async function startVoice() {
     for (const track of micStream.getTracks()) pc.addTrack(track, micStream);
 
     // Data channel for events (transcripts + function calls).
-    const dc = pc.createDataChannel('oai-events');
+    dc = pc.createDataChannel('oai-events');
     dc.addEventListener('open', () => {
       setVoiceState('listening', true);
-      // Re-assert instructions + tools in case the mint didn't carry them.
-      // The GA Realtime API requires session.type on every session.update (the
-      // beta interface didn't); without it the server rejects the event with
-      // "Missing required parameter: 'session.type'".
+      // Re-assert instructions + tools + the GM's voice settings in case the mint
+      // didn't carry them. The GA Realtime API requires session.type on every
+      // session.update (the beta interface didn't); without it the server rejects
+      // the event with "Missing required parameter: 'session.type'". Voice is set
+      // here (before any audio) since it can't be changed once the model has
+      // spoken; speed/temperature/turn-taking can be changed live afterward.
       dc.send(JSON.stringify({
         type: 'session.update',
-        session: { type: 'realtime', instructions: sess.instructions, tools: sess.tools, tool_choice: 'auto' },
+        session: {
+          type: 'realtime',
+          instructions: sess.instructions, tools: sess.tools, tool_choice: 'auto',
+          audio: {
+            output: { voice: settings.voice, speed: settings.speed },
+            input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
+          },
+          temperature: settings.temperature,
+        },
       }));
     });
     dc.addEventListener('message', (e) => handleRealtimeEvent(dc, JSON.parse(e.data)));
@@ -145,6 +278,7 @@ async function startVoice() {
 function stopVoice() {
   if (pc) { pc.close(); pc = null; }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  dc = null;
   setVoiceState('off');
   $('voice-start').disabled = false;
   $('voice-stop').disabled = true;
@@ -161,7 +295,7 @@ async function handleRealtimeEvent(dc, ev) {
     const key = ev.response_id || ev.item_id || 'a';
     if (!liveText[key]) liveText[key] = bubble('transcript', 'Assistant', '');
     liveText[key].textContent += ev.delta || '';
-    $('transcript').scrollTop = $('transcript').scrollHeight;
+    follow('transcript');
     return;
   }
   if (t.endsWith('output_audio_transcript.done') || t === 'response.audio_transcript.done') {
@@ -178,6 +312,9 @@ async function handleRealtimeEvent(dc, ev) {
   if (t === 'response.function_call_arguments.done') {
     let args = {};
     try { args = JSON.parse(ev.arguments || '{}'); } catch { /* leave empty */ }
+    // Narrate it in the transcript NOW so the GM sees work happening during the
+    // model's silence, then resolve the same card with the outcome.
+    const handle = activityStart('transcript', ev.name, args);
     let result;
     try {
       const r = await fetch('/assist/tool', {
@@ -188,7 +325,8 @@ async function handleRealtimeEvent(dc, ev) {
     } catch (err) {
       result = { error: err.message };
     }
-    logActivity(ev.name, args, result);
+    activityResolve(handle, ev.name, args, result);
+    logActivity(ev.name, args, result); // also keep the session summary box
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: ev.call_id, output: JSON.stringify(result) },
@@ -204,6 +342,92 @@ async function handleRealtimeEvent(dc, ev) {
 
 $('voice-start').addEventListener('click', startVoice);
 $('voice-stop').addEventListener('click', stopVoice);
+
+// --- voice settings (voice / speed / creativity / reply-wait) ---------------
+// Options + ranges + defaults come from GET /assist/config (one source of truth);
+// the GM's picks persist in localStorage and ride along when a session is minted.
+// Speed, creativity and reply-wait can be nudged live mid-call via session.update;
+// the voice itself only takes effect on the next "Start talking" (the realtime API
+// won't change voice once the model has produced audio).
+const SETTINGS_KEY = 'assist.voiceSettings';
+let voiceCfg = null; // { voices, ranges, defaults }
+let settings = null; // current effective settings
+
+const RANGE_FIELDS = [
+  { key: 'speed', id: 'set-speed', fmt: (v) => v.toFixed(2) + '×' },
+  { key: 'temperature', id: 'set-temp', fmt: (v) => v.toFixed(2) },
+  { key: 'silence_ms', id: 'set-silence', fmt: (v) => (v / 1000).toFixed(2) + 's' },
+];
+
+function readStored() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { return {}; } }
+function saveStored() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* private mode */ } }
+
+// Push the current settings object back onto the controls (after load or clamping).
+function reflectSettings() {
+  if (!settings) return;
+  $('set-voice').value = settings.voice;
+  for (const f of RANGE_FIELDS) {
+    $(f.id).value = settings[f.key];
+    $(f.id + '-val').textContent = f.fmt(Number(settings[f.key]));
+  }
+}
+
+// Nudge an in-progress call when a live-updatable setting changes (not voice).
+function liveUpdateSettings() {
+  if (!dc || dc.readyState !== 'open' || !settings) return;
+  dc.send(JSON.stringify({
+    type: 'session.update',
+    session: {
+      type: 'realtime',
+      audio: {
+        output: { speed: settings.speed },
+        input: { turn_detection: { type: 'server_vad', silence_duration_ms: settings.silence_ms } },
+      },
+      temperature: settings.temperature,
+    },
+  }));
+}
+
+async function initSettings() {
+  if (voiceCfg) return; // once
+  try {
+    voiceCfg = await (await fetch('/assist/config')).json();
+  } catch {
+    voiceCfg = {
+      voices: ['marin', 'cedar', 'alloy'],
+      ranges: { speed: { min: 0.25, max: 1.5, step: 0.05 }, temperature: { min: 0.6, max: 1.2, step: 0.05 }, silence_ms: { min: 200, max: 1500, step: 50 } },
+      defaults: { voice: 'marin', speed: 1.0, temperature: 0.8, silence_ms: 500 },
+    };
+  }
+  settings = { ...voiceCfg.defaults, ...readStored() };
+  if (!voiceCfg.voices.includes(settings.voice)) settings.voice = voiceCfg.defaults.voice;
+
+  $('set-voice').innerHTML = voiceCfg.voices.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  for (const f of RANGE_FIELDS) {
+    const r = voiceCfg.ranges[f.key];
+    const el = $(f.id);
+    el.min = r.min; el.max = r.max; el.step = r.step;
+  }
+  reflectSettings();
+
+  $('set-voice').addEventListener('change', () => {
+    settings.voice = $('set-voice').value;
+    saveStored(); // voice applies on the next Start talking
+  });
+  for (const f of RANGE_FIELDS) {
+    $(f.id).addEventListener('input', () => {
+      settings[f.key] = Number($(f.id).value);
+      $(f.id + '-val').textContent = f.fmt(settings[f.key]);
+      saveStored();
+      liveUpdateSettings();
+    });
+  }
+}
+
+// --- page init --------------------------------------------------------------
+makeAutoScroll('transcript', 'transcript-autoscroll');
+makeAutoScroll('chat-log', 'chat-log-autoscroll');
+initSettings();
 
 // --- prep-pack import -------------------------------------------------------
 // Stream the newline-delimited JSON from /assist/import and show each card and

@@ -26,6 +26,37 @@
   .pill.live { border-color: var(--ember); color: var(--ember); }
   .chat-input { display: flex; gap: 8px; margin-top: 10px; }
   .chat-input input { flex: 1; }
+
+  /* scroll header: title on the left, auto-scroll toggle on the right */
+  .scroll-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 6px; }
+  .scroll-head .lbl { font-family: 'Trebuchet MS', sans-serif; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--ink-dim); }
+  .scrollbtn { font-size: 0.75rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--bg-raised); color: var(--ink-dim); cursor: pointer; }
+  .scrollbtn.on { border-color: var(--ember); color: var(--ember); }
+
+  /* inline activity cards (tool calls shown in the transcript as they happen) */
+  .act-card { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; padding: 8px 10px;
+    background: #1b130c; border: 1px solid var(--line); border-left: 3px solid var(--gold); border-radius: 8px; }
+  .act-card.err { border-left-color: var(--ember-deep); }
+  .act-card.done { border-left-color: var(--ember); }
+  .act-ico { font-size: 1.05rem; line-height: 1.3; }
+  .act-body { flex: 1; min-width: 0; }
+  .act-title { font-family: 'Trebuchet MS', sans-serif; font-weight: bold; color: var(--gold); font-size: 0.9rem; }
+  .act-detail { color: var(--ink); font-size: 0.85rem; margin-top: 2px; overflow-wrap: anywhere; }
+  .act-status { color: var(--ink-dim); font-size: 0.78rem; margin-top: 3px; }
+  .act-card.err .act-status { color: var(--ember-deep); }
+  .act-card img { max-width: 88px; border-radius: 6px; margin-top: 6px; display: block; }
+
+  /* voice settings panel */
+  .vset { margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-raised); padding: 0 12px; }
+  .vset > summary { cursor: pointer; padding: 10px 0; font-family: 'Trebuchet MS', sans-serif; color: var(--gold); }
+  .vset[open] { padding-bottom: 12px; }
+  .vrow { display: grid; grid-template-columns: 120px 1fr 56px; align-items: center; gap: 10px; margin: 8px 0; }
+  .vrow label { font-size: 0.85rem; color: var(--ink); }
+  .vrow input[type=range] { width: 100%; }
+  .vrow select { width: 100%; }
+  .vrow .val { font-size: 0.82rem; color: var(--ink-dim); text-align: right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -49,11 +80,46 @@
         <button class="ghost" id="voice-stop" disabled>Stop</button>
       </div>
       <p class="muted small">Uses OpenAI's realtime voice over WebRTC. Allow microphone access when asked.</p>
+
+      <details class="vset">
+        <summary>⚙ Voice settings</summary>
+        <div class="vrow">
+          <label for="set-voice">Voice</label>
+          <select id="set-voice"></select>
+          <span class="val"></span>
+        </div>
+        <div class="vrow">
+          <label for="set-speed">Talking speed</label>
+          <input type="range" id="set-speed">
+          <span class="val" id="set-speed-val"></span>
+        </div>
+        <div class="vrow">
+          <label for="set-temp">Creativity</label>
+          <input type="range" id="set-temp">
+          <span class="val" id="set-temp-val"></span>
+        </div>
+        <div class="vrow">
+          <label for="set-silence">Reply wait</label>
+          <input type="range" id="set-silence">
+          <span class="val" id="set-silence-val"></span>
+        </div>
+        <p class="muted small" style="margin:6px 0 0">Talking speed, creativity and reply-wait apply live;
+          the <strong>voice</strong> changes the next time you press “Start talking”.</p>
+      </details>
+
+      <div class="scroll-head">
+        <span class="lbl">Conversation &amp; activity</span>
+        <button class="scrollbtn" id="transcript-autoscroll" type="button">Auto-scroll</button>
+      </div>
       <div class="transcript" id="transcript"><p class="muted">Press “Start talking”, then just speak.</p></div>
     </div>
 
     <div class="card">
       <h2 style="margin-top:0">⌨ Text</h2>
+      <div class="scroll-head">
+        <span class="lbl">Chat &amp; activity</span>
+        <button class="scrollbtn" id="chat-log-autoscroll" type="button">Auto-scroll</button>
+      </div>
       <div class="transcript" id="chat-log"><p class="muted">Type a request, e.g. “Build me a smuggler NPC who runs the docks, with a portrait.”</p></div>
       <form class="chat-input" id="chat-form">
         <input type="text" id="chat-text" placeholder="Describe what you want…" autocomplete="off">
