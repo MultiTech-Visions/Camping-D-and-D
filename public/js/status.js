@@ -8,6 +8,7 @@
   const playerArea = document.getElementById('player-area');
   const gmArea = document.getElementById('gm-area');
   const who = document.getElementById('who');
+  const displayUrl = document.getElementById('display-url');
   let lastKey = '';
 
   function qrInto(parent, text, size) {
@@ -70,6 +71,10 @@
       } else {
         gmArea.insertAdjacentHTML('beforeend', `<p class="muted">No network address yet — waiting for WiFi…</p>`);
       }
+
+      // The display URL, shown under the "switch to projector" button so you can
+      // type it into a TV's browser instead of running it on the Pi.
+      displayUrl.textContent = addr ? `http://${addr}:${st.port}/display` : '';
     }
 
     const up = st.uptime_s;
