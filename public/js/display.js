@@ -15,6 +15,7 @@
 // (PixiJS WebGL: map sprite + tokens + glows, camera-driven).
 
 (function () {
+  const titleEl = document.getElementById('d-title');
   const turnEl = document.getElementById('d-turn');
   const clocksEl = document.getElementById('d-clocks');
   const rosterEl = document.getElementById('d-roster');
@@ -410,6 +411,9 @@
       // live and this re-renders in place (same id) without restarting slides.
       if (snap.revealed_card) CampfireNPCReveal.show(snap.revealed_card, { dismissible: false });
       else CampfireNPCReveal.hide();
+
+      // Projector title = the live campaign's name (falls back to the app name).
+      titleEl.textContent = `🔥 ${snap.campaign_name || 'Campfire Saga'}`;
 
       const mapMode = snap.map !== null;
       document.body.classList.toggle('map-mode', mapMode);

@@ -829,6 +829,49 @@ check('tokens are scoped to their map; switching maps swaps the token set', () =
   ops['map.delete']({ map_id: mapB });
 });
 
+// --- games (campaign library): isolation + live switching ------------------
+check('games: separate DBs, switching reloads, rename/delete + guards', () => {
+  const dbApi = require('../db');
+  const mk = (name) => ({ system: 'campfire', name, concept: 'x', brawn: 1, constitution: 1, magic: 1, wits: 1, flavor: 'f', hidden_desire: 'hd', gear: 'g', notes: 'n' });
+
+  // First boot adopts the throwaway DB as the single 'default' game.
+  assert.strictEqual(dbApi.getActiveGame(), 'default');
+  const dmSnap = snapshotFor('dm', null);
+  assert.ok(Array.isArray(dmSnap.games) && dmSnap.games.some((g) => g.id === 'default'), 'GM snapshot lists games');
+  assert.strictEqual(dmSnap.active_game, 'default');
+
+  const beforeCharsHere = state.characters.size;
+  ops['character.create'](mk('Marker-In-Default'));
+  const defaultCount = state.characters.size;
+  assert.strictEqual(defaultCount, beforeCharsHere + 1);
+
+  // Create + switch to a brand-new, empty campaign.
+  ops['game.create']({ name: 'Spooky Cove', switch_to: true });
+  assert.strictEqual(dbApi.getActiveGame(), 'spooky-cove');
+  assert.strictEqual(state.characters.size, 0, 'a fresh game starts empty — fully isolated');
+
+  ops['character.create'](mk('Wisp'));
+  assert.deepStrictEqual([...state.characters.values()].map((c) => c.name), ['Wisp']);
+
+  // Switching back restores the default game's data untouched.
+  ops['game.switch']({ id: 'default' });
+  assert.strictEqual(state.characters.size, defaultCount, 'switching back restores the other game intact');
+  assert.ok([...state.characters.values()].some((c) => c.name === 'Marker-In-Default'));
+
+  // rename, then guards, then delete the inactive game and clean up our marker.
+  ops['game.rename']({ id: 'spooky-cove', name: 'Spooky Cove 2' });
+  assert.ok(ops['game.list']().games.find((g) => g.id === 'spooky-cove').name === 'Spooky Cove 2');
+  throws(() => ops['game.delete']({ id: 'default' }));   // can't delete the active game
+  throws(() => ops['game.switch']({ id: 'no-such' }));   // can't switch to a missing game
+  ops['game.delete']({ id: 'spooky-cove' });
+  assert.deepStrictEqual(ops['game.list']().games.map((g) => g.id), ['default']);
+
+  // leave the table the way later tests expect it
+  const marker = [...state.characters.values()].find((c) => c.name === 'Marker-In-Default');
+  ops['character.delete']({ char_id: marker.id });
+  assert.strictEqual(dbApi.getActiveGame(), 'default');
+});
+
 // --- prep-pack import (builder.html → /assist/import) ----------------------
 // These two are async (importPack returns a promise), so they run through a
 // small async runner below instead of the synchronous check() above.

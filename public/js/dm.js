@@ -194,38 +194,13 @@
     ])];
     root.appendChild(el(`<datalist id="cond-suggestions">${suggestions.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>`));
 
-    const jumps = el(`<div class="section-jumps"></div>`);
-    const jumpData = [
-      ['initiative', '⚔', snap.initiative.entries.length],
-      ['clocks', '🕗', snap.clocks.length],
-      ['map', '🗺', snap.map ? 1 : 0],
-      ['npc', '🐲', (snap.cards || []).filter((c) => c.kind === 'npc').length],
-      ['location', '🌍', (snap.cards || []).filter((c) => c.kind === 'location').length],
-      ['story', '📖', (snap.cards || []).filter((c) => c.kind === 'story').length],
-      ['party', '👥', snap.characters.length],
-      ['devices', '📱', (snap.devices || []).filter((d) => d.online).length],
-      ['settings', '⚙', 0],
-    ];
-    for (const [key, icon, count] of jumpData) {
-      const pill = el(`<button class="section-pill ${gmSections[key] ? 'active' : ''}">${icon}<span class="section-pill-count">${count || ''}</span></button>`);
-      pill.onclick = () => {
-        gmSections[key] = !gmSections[key];
-        render();
-        if (gmSections[key]) {
-          const target = document.getElementById('gm-' + key);
-          if (target) setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-        }
-      };
-      jumps.appendChild(pill);
-    }
-    root.appendChild(jumps);
-
     root.appendChild(initiativeBoard());
     root.appendChild(clocksManager());
     root.appendChild(mapManager());
     root.appendChild(cardSection('npc'));
     root.appendChild(cardSection('location'));
     root.appendChild(cardSection('story'));
+    root.appendChild(gamesSection());
     root.appendChild(partySection());
     root.appendChild(devicesSection());
     root.appendChild(settingsSection());
@@ -246,6 +221,78 @@
       bar.appendChild(next);
       document.body.appendChild(bar);
     }
+  }
+
+  // --- Games: the campaign library. Each game is its own isolated database;
+  // switching reloads the whole table (party, maps, cards, clocks…) from it.
+  // Switching/deleting affects every connected screen at once, so the actions
+  // confirm first.
+  function gamesSection() {
+    const box = el(`<div class="card" id="gm-games"></div>`);
+    const games = snap.games || [];
+    const active = snap.active_game;
+    const activeName = (games.find((g) => g.id === active) || {}).name || active || '—';
+    const toggle = el(`<div class="section-toggle">
+      <span class="section-arrow" style="transform:rotate(${gmSections.games ? 90 : 0}deg)">▶</span>
+      <h3 style="margin:0;flex:1">🎲 Campaigns</h3>
+      <span class="muted small">${esc(activeName)}</span>
+    </div>`);
+    toggle.onclick = () => { gmSections.games = !gmSections.games; render(); };
+    box.appendChild(toggle);
+    if (!gmSections.games) return box;
+
+    box.appendChild(el(`<p class="muted small" style="margin:6px 0 10px">Each campaign keeps its own characters, maps, NPCs and clocks, totally separate. Switching swaps the live game for everyone — players, projector and you.</p>`));
+
+    for (const g of games) {
+      const isActive = g.id === active;
+      const panel = el(`<div style="margin:8px 0;padding:8px;border:1px ${isActive ? 'solid var(--accent, #c9a227)' : 'solid var(--line)'};border-radius:8px"></div>`);
+      const head = el(`<div style="display:flex;align-items:center;gap:8px"></div>`);
+      head.appendChild(el(`<span>${isActive ? '🟢' : '⚪'}</span>`));
+      const nameIn = el(`<input type="text" maxlength="80" value="${esc(g.name)}" style="flex:1;font-size:0.9rem">`);
+      head.appendChild(nameIn);
+      const renameBtn = el(`<button class="mini">rename</button>`);
+      renameBtn.onclick = () => {
+        const name = nameIn.value.trim();
+        if (name && name !== g.name) conn.action('game.rename', { id: g.id, name });
+      };
+      nameIn.onkeydown = (ev) => { if (ev.key === 'Enter') renameBtn.onclick(); };
+      head.appendChild(renameBtn);
+      if (isActive) {
+        head.appendChild(el(`<span class="muted small" style="margin-left:2px">live</span>`));
+      } else {
+        const switchBtn = el(`<button class="mini">play this</button>`);
+        switchBtn.onclick = () => {
+          if (confirm(`Switch the table to "${g.name}"? Everyone's screen will load this campaign.`)) {
+            conn.action('game.switch', { id: g.id });
+          }
+        };
+        head.appendChild(switchBtn);
+        const delBtn = el(`<button class="mini ghost danger" title="delete this campaign and all its data">🗑</button>`);
+        delBtn.onclick = () => {
+          if (confirm(`Delete campaign "${g.name}"? This permanently removes its characters, maps, NPCs and art. This cannot be undone.`)) {
+            conn.action('game.delete', { id: g.id });
+          }
+        };
+        head.appendChild(delBtn);
+      }
+      panel.appendChild(head);
+      box.appendChild(panel);
+    }
+
+    // New campaign
+    const addRow = el(`<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>`);
+    const newIn = el(`<input type="text" maxlength="80" placeholder="New campaign name…" style="flex:1;min-width:180px">`);
+    const addBtn = el(`<button class="primary">＋ Create campaign</button>`);
+    const create = () => {
+      const name = newIn.value.trim();
+      if (name) { conn.action('game.create', { name }); newIn.value = ''; }
+    };
+    addBtn.onclick = create;
+    newIn.onkeydown = (ev) => { if (ev.key === 'Enter') create(); };
+    addRow.append(newIn, addBtn);
+    box.appendChild(addRow);
+    box.appendChild(el(`<p class="muted small" style="margin-top:8px">Created empty. To fill one from a prep pack, use the <a href="/assist">🪄 Assistant</a> — it can import into any campaign here.</p>`));
+    return box;
   }
 
   function partySection() {
@@ -701,7 +748,7 @@
 
   // Which GM categories are expanded — persisted to localStorage so the screen
   // comes back the way you left it after a refresh. The Proxy saves on any change.
-  const SECTION_DEFAULTS = { initiative: true, clocks: true, map: true, npc: false, location: false, story: false, party: true, devices: false, settings: false };
+  const SECTION_DEFAULTS = { games: false, initiative: true, clocks: true, map: true, npc: false, location: false, story: false, party: true, devices: false, settings: false };
   let savedSections = {};
   try { savedSections = JSON.parse(localStorage.getItem('campfire_gm_sections') || '{}'); } catch (e) { savedSections = {}; }
   const gmSections = new Proxy({ ...SECTION_DEFAULTS, ...savedSections }, {
@@ -1801,6 +1848,29 @@
     return (await res.json()).art;
   }
 
+  // Phone Back-button guard. While a full-screen popup is open, the device Back
+  // button (and browser back) should CLOSE the popup, not navigate away from the
+  // GM screen. We push a throwaway history entry on open; a popstate (Back) runs
+  // teardown. If the popup is dismissed another way, releaseFromUI() pops our
+  // entry back off so Back stays balanced. Returns that release function.
+  function guardOverlayBack(teardown) {
+    let active = true;
+    const onPop = () => {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('popstate', onPop);
+      teardown();
+    };
+    history.pushState({ campfireOverlay: true }, '');
+    window.addEventListener('popstate', onPop);
+    return function releaseFromUI() {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('popstate', onPop);
+      history.back(); // consume our pushed entry; listener is gone, so it's silent
+    };
+  }
+
   // Full-screen single-field text editor (free-text notes / entry bodies). Saves
   // on Done if the text changed. Mirrors the players' note editor.
   function openCardTextEditor(title, value, onSave) {
@@ -1815,10 +1885,12 @@
     CampfireScrollLock.lock();
     document.body.appendChild(overlay);
     ta.focus();
+    const teardown = () => { overlay.remove(); CampfireScrollLock.unlock(); };
+    const releaseBack = guardOverlayBack(teardown);
     done.onclick = () => {
       if (ta.value !== (value || '')) onSave(ta.value);
-      overlay.remove();
-      CampfireScrollLock.unlock();
+      teardown();
+      releaseBack();
     };
   }
 
@@ -1982,7 +2054,9 @@
       const editing = cardUI.editing === c.id;
       const isShowing = snap.revealed_card_id === c.id;
       const row = el(`<div class="attr-row" style="align-items:center"></div>`);
-      row.appendChild(el(`<span class="npc-thumb ${c.images[0] ? '' : 'placeholder'}" style="${thumbStyle(c.images[0])}">${c.images[0] ? '' : cfg.thumbEmoji}</span>`));
+      const thumb = el(`<span class="npc-thumb ${c.images[0] ? '' : 'placeholder'}" style="${thumbStyle(c.images[0])};cursor:pointer" title="open the GM reading view">${c.images[0] ? '' : cfg.thumbEmoji}</span>`);
+      thumb.onclick = () => openCardViewer(c.id);
+      row.appendChild(thumb);
       let badge = '';
       if (cfg.done) {
         const all = c.sections.reduce((a, s) => a + s.entries.length, 0);
@@ -1993,8 +2067,12 @@
       } else if (cfg.seen && c.seen) {
         badge = ` <span class="small" style="color:var(--ok)">· ✓ seen</span>`;
       }
-      row.appendChild(el(`<span class="attr-name" style="width:auto;flex:1;margin-left:8px">${esc(c.name)}${c.subtitle ? ` <span class="muted small">— ${esc(c.subtitle)}</span>` : ''}${badge}</span>`));
-      const ctl = el(`<span class="btn-row" style="margin:0"></span>`);
+      const nameEl = el(`<span class="attr-name" style="width:auto;flex:1;margin-left:8px;cursor:pointer" title="open the GM reading view">${esc(c.name)}${c.subtitle ? ` <span class="muted small">— ${esc(c.subtitle)}</span>` : ''}${badge}</span>`);
+      nameEl.onclick = () => openCardViewer(c.id);
+      row.appendChild(nameEl);
+      // Buttons always sit on their own second line (title up top), so every kind
+      // matches regardless of how many buttons it has.
+      const ctl = el(`<span class="btn-row" style="margin:4px 0 0;flex-basis:100%"></span>`);
       if (cfg.addToInit) {
         // add to the initiative order (a custom entry by name); tap again for a
         // second copy when a scene has more than one of the same creature
@@ -2003,8 +2081,6 @@
         init.onclick = () => { conn.action('initiative.add_custom', { label: c.name, art: c.images[0] || '', w: c.token_w, h: c.token_h, shape: c.token_shape }); conn.toast(`${c.name} added to initiative ⚔`, true); };
         ctl.appendChild(init);
       }
-      const view = el(`<button class="mini ghost" title="open the GM reading view — all details, with quick show/hide">📖</button>`);
-      view.onclick = () => openCardViewer(c.id);
       const reveal = el(`<button class="mini ${isShowing ? 'primary' : ''}" title="show full-screen on the projector + players">${isShowing ? '⏹ Stop' : '📽 Show'}</button>`);
       reveal.onclick = () => conn.action('card.reveal', { card_id: isShowing ? null : c.id });
       const edit = el(`<button class="mini ${editing ? 'primary' : 'ghost'}" title="edit">✎</button>`);
@@ -2023,7 +2099,7 @@
       };
       const del = el(`<button class="mini danger ghost" title="delete">🗑</button>`);
       del.onclick = () => { if (confirm(`Delete "${c.name}"? This removes it for good.`)) conn.action('card.delete', { card_id: c.id }); };
-      ctl.append(view, reveal, edit, del);
+      ctl.append(reveal, edit, del);
       row.appendChild(ctl);
       box.appendChild(row);
       if (editing) box.appendChild(cardEditor(c));
@@ -2424,15 +2500,20 @@
       imgIndex: heldIdx !== null ? heldIdx : 0,
       holdImage: revealedHere ? (heldIdx !== null) : true,
     };
+    // Phone Back closes the viewer instead of leaving the page.
+    cardViewer.releaseBack = guardOverlayBack(closeCardViewer);
     updateCardViewer();
   }
 
   function closeCardViewer() {
     if (!cardViewer) return;
     if (cardViewer.fxHandle) cardViewer.fxHandle.stop();
+    const releaseBack = cardViewer.releaseBack;
     cardViewer.overlay.remove();
     cardViewer = null;
     CampfireScrollLock.unlock();
+    // Balance the history entry we pushed (no-op if Back itself triggered this).
+    if (releaseBack) releaseBack();
     // Deliberately DON'T release the held image — the projector keeps showing
     // whatever the GM set, so they can pin "the image we're on" and walk away.
   }

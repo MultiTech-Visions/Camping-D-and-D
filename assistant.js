@@ -23,9 +23,9 @@ const path = require('path');
 const config = require('./config');
 const R = require('./rules');
 const { state, ops } = require('./state');
+const store = require('./db');
 
 const DATA_DIR = process.env.CAMPFIRE_DATA_DIR || path.join(__dirname, 'data');
-const TOKENS_DIR = path.join(__dirname, 'public', 'assets', 'tokens');
 
 // --- secret -----------------------------------------------------------------
 // Read at request time, NOT at boot: the app must start and run offline with no
@@ -181,7 +181,7 @@ const TOOL_DEFS = [
   },
   {
     name: 'generate_image',
-    description: 'Generate an image from a text prompt and save it. Returns { image_path } to use in cards/characters. Write a rich, specific visual prompt (style, lighting, mood, composition).',
+    description: 'Generate an image from a text prompt. Returns { image_path } IMMEDIATELY (the picture renders in the background a few seconds later). Use image_path right away in cards/characters and keep going — never wait or pause the conversation for the image. Write a rich, specific visual prompt (style, lighting, mood, composition).',
     parameters: {
       type: 'object',
       properties: {
@@ -255,10 +255,48 @@ async function generateImage(prompt, size) {
   });
   const b64 = json && json.data && json.data[0] && json.data[0].b64_json;
   if (!b64) throw Object.assign(new Error('image API returned no image data'), { expected: true, status: 502 });
-  if (!fs.existsSync(TOKENS_DIR)) fs.mkdirSync(TOKENS_DIR, { recursive: true });
+  // Generated art lands in the ACTIVE game's tokens folder (gameAssetDir
+  // creates it on demand), so an imported campaign's images stay with it.
+  const tokensDir = store.gameAssetDir('tokens');
+  if (!fs.existsSync(tokensDir)) fs.mkdirSync(tokensDir, { recursive: true });
   const name = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
-  fs.writeFileSync(path.join(TOKENS_DIR, name), Buffer.from(b64, 'base64'));
+  fs.writeFileSync(path.join(tokensDir, name), Buffer.from(b64, 'base64'));
   return `/assets/tokens/${name}`;
+}
+
+// Non-blocking variant for the live assistant: reserve the asset path NOW and
+// return it immediately so the model can attach it to a card and keep talking,
+// then fetch the bytes in the background. When they land we broadcast() so any
+// open /dm or /display re-fetches the (now-present) image. The realtime voice
+// session never stalls waiting on the ~10-30s image call.
+function startImageGeneration(prompt, size, { broadcast, log } = {}) {
+  const tokensDir = store.gameAssetDir('tokens');
+  if (!fs.existsSync(tokensDir)) fs.mkdirSync(tokensDir, { recursive: true });
+  const name = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+  const filePath = path.join(tokensDir, name);
+  const image_path = `/assets/tokens/${name}`;
+
+  (async () => {
+    try {
+      const json = await openai('/v1/images/generations', {
+        model: config.ASSISTANT.IMAGE_MODEL,
+        prompt,
+        size: size || config.ASSISTANT.IMAGE_SIZE,
+        n: 1,
+      });
+      const b64 = json && json.data && json.data[0] && json.data[0].b64_json;
+      if (!b64) throw new Error('image API returned no image data');
+      fs.writeFileSync(filePath, Buffer.from(b64, 'base64'));
+      if (log) log(`assist image ready ${image_path}`);
+    } catch (err) {
+      if (log) log(`assist image failed ${image_path}: ${err.message}`);
+    }
+    // Push a fresh snapshot either way so displays pick up the new file (or stop
+    // waiting on a placeholder if it failed).
+    if (broadcast) broadcast();
+  })();
+
+  return image_path;
 }
 
 // --- prep-pack import (the "upload at home" path) ---------------------------
@@ -354,7 +392,7 @@ async function importPack(pack, { broadcast, onProgress }) {
 // --- the one tool executor (shared by voice + text) -------------------------
 // Returns a plain object the model receives as the tool result. Mutating tools
 // broadcast a fresh snapshot so any open /dm or /display updates live.
-async function executeTool(name, args, broadcast) {
+async function executeTool(name, args, broadcast, log) {
   const a = args || {};
   switch (name) {
     case 'get_overview':
@@ -390,8 +428,15 @@ async function executeTool(name, args, broadcast) {
       return { ok: true };
 
     case 'generate_image': {
-      const image_path = await generateImage(a.prompt, a.size);
-      return { image_path };
+      // Fire-and-forget: hand back the reserved path right away so the model can
+      // attach it to a card and continue the conversation; the bytes arrive in
+      // the background and a broadcast refreshes displays when they do.
+      const image_path = startImageGeneration(a.prompt, a.size, { broadcast, log });
+      return {
+        image_path,
+        status: 'generating',
+        note: 'Image is being generated in the background and will appear on cards within a few seconds. Use image_path now; do not wait for it.',
+      };
     }
 
     default:
@@ -443,7 +488,7 @@ function mount(app, { broadcast, log }) {
   app.post('/assist/tool', json, async (req, res) => {
     const { name, arguments: args } = req.body || {};
     try {
-      const result = await executeTool(name, args, broadcast);
+      const result = await executeTool(name, args, broadcast, log);
       log(`assist tool ${name} ok`);
       res.json({ result });
     } catch (err) {
@@ -453,18 +498,44 @@ function mount(app, { broadcast, log }) {
     }
   });
 
+  // Campaign ("Games") library for the import picker: every game + which is live.
+  app.get('/assist/games', (req, res) => {
+    res.json({ games: store.listGames(), active_game: store.getActiveGame() });
+  });
+
   // Import a prep pack built offline in builder.html. Streams newline-delimited
   // JSON progress (one line per card/image) so the browser can show the image
   // queue working live, then a final {done,summary} line. Errors mid-stream are
   // sent as a {error} line rather than an HTTP status, since the body is already
   // flowing by then.
+  //
+  // The body is { pack, target } where target picks the destination campaign:
+  //   { mode:'new', name }       create a fresh game and import into it
+  //   { mode:'existing', id }    switch to that game and import into it
+  //   null/absent                import into whatever game is already live
+  // Either way the chosen game becomes the live one, so several files can be
+  // imported into the same campaign one after another and stack up.
   app.post('/assist/import', express.json({ limit: '8mb' }), async (req, res) => {
     res.setHeader('Content-Type', 'application/x-ndjson');
     const send = (o) => { res.write(JSON.stringify(o) + '\n'); };
     try {
-      const summary = await importPack(req.body, { broadcast, onProgress: send });
-      log(`assist/import ok: ${summary.cards_created} cards, ${summary.images_made} images, ${summary.image_errors.length} image errors`);
-      send({ done: true, summary });
+      const body = req.body || {};
+      const wrapped = body.pack && typeof body.pack === 'object';
+      const pack = wrapped ? body.pack : body;       // tolerate a bare pack (older client)
+      const target = wrapped ? body.target : null;
+      if (target && target.mode === 'new') {
+        const { game } = ops['game.create']({ name: target.name, switch_to: true });
+        send({ stage: 'game', action: 'created', id: game.id, name: game.name });
+        broadcast();
+      } else if (target && target.mode === 'existing') {
+        ops['game.switch']({ id: target.id });
+        send({ stage: 'game', action: 'switched', id: target.id });
+        broadcast();
+      }
+      const summary = await importPack(pack, { broadcast, onProgress: send });
+      const game = store.listGames().find((g) => g.id === store.getActiveGame());
+      log(`assist/import ok: ${summary.cards_created} cards, ${summary.images_made} images, ${summary.image_errors.length} image errors into ${game ? game.id : '?'}`);
+      send({ done: true, summary, game_id: game && game.id, game_name: game && game.name });
     } catch (err) {
       log(`assist/import error: ${err.message}`);
       send({ error: err.message });
@@ -499,7 +570,7 @@ function mount(app, { broadcast, log }) {
           try { parsed = JSON.parse(call.function.arguments || '{}'); } catch { /* leave empty */ }
           let result;
           try {
-            result = await executeTool(call.function.name, parsed, broadcast);
+            result = await executeTool(call.function.name, parsed, broadcast, log);
           } catch (err) {
             result = { error: err.message };
           }

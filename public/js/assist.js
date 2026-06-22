@@ -452,7 +452,9 @@ function importRow(text, cls) {
 }
 
 function handleImportEvent(ev) {
-  if (ev.stage === 'card') importRow(`📇 Creating card: ${ev.name}`);
+  if (ev.stage === 'game') {
+    importRow(ev.action === 'created' ? `🆕 Created campaign "${ev.name}" — now live.` : `🎲 Switched to this campaign — now live.`);
+  } else if (ev.stage === 'card') importRow(`📇 Creating card: ${ev.name}`);
   else if (ev.stage === 'image') importRow(`🎨 Generating image — ${ev.prompt.slice(0, 80)}…`);
   else if (ev.stage === 'image_done') {
     const r = importRow('   ✓ image ready');
@@ -462,19 +464,61 @@ function handleImportEvent(ev) {
   else if (ev.done) {
     const s = ev.summary || {};
     importRow(`✅ Imported ${s.cards_created} card(s), ${s.images_made} image(s)` +
-      (s.image_errors && s.image_errors.length ? `, ${s.image_errors.length} image(s) failed` : '') + '.');
+      (s.image_errors && s.image_errors.length ? `, ${s.image_errors.length} image(s) failed` : '') +
+      (ev.game_name ? ` into "${ev.game_name}".` : '.'));
+    loadGames(); // a brand-new campaign may have just been created
   } else if (ev.error) importRow(`⚠ ${ev.error}`, 'err');
 }
+
+// Campaign ("Games") target picker. Populate the dropdown with every game (the
+// active one preselected, so "add to the current campaign" is the default) plus
+// a "New campaign…" choice that reveals a name field.
+const NEW_GAME = '__new__';
+async function loadGames() {
+  try {
+    const { games, active_game } = await (await fetch('/assist/games')).json();
+    const sel = $('import-game');
+    sel.innerHTML = '';
+    for (const g of games) {
+      const o = document.createElement('option');
+      o.value = g.id; o.textContent = g.name + (g.id === active_game ? ' (current)' : '');
+      sel.appendChild(o);
+    }
+    const newOpt = document.createElement('option');
+    newOpt.value = NEW_GAME; newOpt.textContent = '＋ New campaign…';
+    sel.appendChild(newOpt);
+    sel.value = active_game || (games[0] && games[0].id) || NEW_GAME;
+    reflectGamePick();
+  } catch { /* offline / no server — leave the picker empty, import still works */ }
+}
+function reflectGamePick() {
+  $('import-new-name').style.display = $('import-game').value === NEW_GAME ? '' : 'none';
+}
+// Returns the chosen destination for the import, or throws if a new campaign was
+// asked for without a name.
+function importTarget() {
+  const id = $('import-game').value;
+  if (id === NEW_GAME) {
+    const name = $('import-new-name').value.trim();
+    if (!name) throw new Error('name the new campaign first');
+    return { mode: 'new', name };
+  }
+  if (!id) return null; // picker never loaded — import into whatever's active
+  return { mode: 'existing', id };
+}
+$('import-game').addEventListener('change', reflectGamePick);
 
 async function runImport(file) {
   $('import-pick').disabled = true;
   importRow(`Reading ${file.name}…`);
   let res;
   try {
+    const target = importTarget();
     const text = await file.text();
-    JSON.parse(text); // fail fast on a non-JSON file before hitting the server
+    const pack = JSON.parse(text); // fail fast on a non-JSON file before hitting the server
     res = await fetch('/assist/import', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text,
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pack, target }),
     });
   } catch (err) {
     importRow(`⚠ ${err.message}`, 'err');
@@ -510,3 +554,5 @@ $('import-file').addEventListener('change', (e) => {
   if (e.target.files[0]) runImport(e.target.files[0]);
   e.target.value = '';
 });
+
+loadGames();

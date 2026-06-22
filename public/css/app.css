@@ -282,10 +282,15 @@ body.display-mode .clock-kind {
   font-weight: 700;
 }
 .display-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; height: 100vh; padding: 18px; }
-.display-main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+.display-main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
 .display-roster { overflow-y: auto; }
 .display-roster .card { margin: 8px 0; padding: 10px; }
-.turn-banner { font-size: 2rem; color: var(--ember); text-shadow: 0 0 24px rgba(255, 140, 46, 0.6); text-align: center; }
+/* Projector title scales with the screen so it fills the empty space. */
+body.display-mode #d-title {
+  font-size: clamp(3rem, 11vw, 9rem); line-height: 1.04; margin: 0;
+  text-align: center; max-width: 18ch; text-wrap: balance;
+}
+.turn-banner { font-size: clamp(2rem, 3.5vw, 3.4rem); color: var(--ember); text-shadow: 0 0 24px rgba(255, 140, 46, 0.6); text-align: center; }
 #embers { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 .display-grid { position: relative; z-index: 1; }
 
@@ -297,19 +302,6 @@ body.display-mode .clock-kind {
 .section-arrow {
   font-size: 0.7em; color: var(--ink-dim); transition: transform 0.15s;
 }
-
-/* --- GM section jump pills --- */
-.section-jumps {
-  display: flex; gap: 6px; margin: 8px 0;
-}
-.section-pill {
-  display: flex; align-items: center; gap: 4px; min-height: 38px;
-  padding: 4px 10px; font-size: 1.1rem; border-radius: 999px;
-  background: var(--bg-card); border: 1px solid var(--line);
-  white-space: nowrap; flex: 1; justify-content: center;
-}
-.section-pill.active { border-color: var(--ember-deep); color: var(--ember); }
-.section-pill-count { font-size: 0.75rem; color: var(--ink-dim); }
 
 /* --- GM sticky bottom bar --- */
 .gm-sticky {
@@ -350,7 +342,6 @@ body.display-mode .clock-kind {
   .attr-name { width: 90px; }
   .cam-minimap { max-width: 100%; }
   .cam-controls { justify-content: center; }
-  .section-pill { padding: 4px 6px; font-size: 1rem; }
   .card { padding: 12px; }
   button.mini { padding: 4px 8px; font-size: 0.85rem; }
 }
@@ -734,7 +725,8 @@ body.display-mode .clock-kind {
   display: flex; gap: 10px; align-items: flex-start; padding: 8px 0;
   border-bottom: 1px solid rgba(61, 48, 37, 0.5);
 }
-.npc-viewer-entry.is-hidden { opacity: 0.45; }
+/* Hidden entries stay fully legible — distinguished by italics, not dimming. */
+.npc-viewer-entry.is-hidden .npc-viewer-entry-body { font-style: italic; }
 .npc-viewer-entry .mini { flex: none; }
 .npc-viewer-entry-body { flex: 1; min-width: 0; }
 .npc-viewer-label { font-weight: 700; color: var(--ink); }

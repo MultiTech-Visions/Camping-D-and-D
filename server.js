@@ -44,8 +44,27 @@ process.on('unhandledRejection', (err) => {
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
+// db.js owns the games registry + per-game asset directories. Uploaded campaign
+// art (maps, tokens) lives under the ACTIVE game's folder, not in public/, so
+// each campaign only ever sees its own images. Resolved per-request so it
+// follows the active game after a live switch.
+const store = require('./db');
+
 function page(file) {
   return (req, res) => res.sendFile(path.join(PUBLIC_DIR, file));
+}
+
+// Serve /assets/<sub>/<name> from the active game's asset directory. The :name
+// route param can't contain a slash, and path.basename strips any leftover, so
+// there's no path traversal out of the game folder. Registered before
+// express.static so it shadows any same-named file left in public/assets.
+function gameAsset(sub) {
+  return (req, res) => {
+    const name = path.basename(req.params.name);
+    res.sendFile(path.join(store.gameAssetDir(sub), name), (err) => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
+  };
 }
 
 function lanAddresses() {
@@ -127,6 +146,10 @@ playerApp.get('/play', page('player.html'));
 playerApp.get('/learn', page('learn.html'));
 playerApp.get('/display', page('display.html'));
 
+// Per-game uploaded art (maps/tokens) — served from the active campaign's folder.
+playerApp.get('/assets/maps/:name', gameAsset('maps'));
+playerApp.get('/assets/tokens/:name', gameAsset('tokens'));
+
 // Token art upload: players and GM both use this endpoint on the player port.
 playerApp.post('/upload/token',
   express.raw({ type: Object.keys(UPLOAD_TYPES), limit: 10 * 1024 * 1024 }),
@@ -135,7 +158,7 @@ playerApp.post('/upload/token',
     if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
     const name = `token-${Date.now()}.${ext}`;
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
+    fs.writeFileSync(path.join(store.gameAssetDir('tokens'), name), req.body);
     log(`token art uploaded: ${name} (${req.body.length} bytes)`);
     res.json({ art: `/assets/tokens/${name}` });
   });
@@ -152,6 +175,10 @@ gmApp.get('/learn', page('learn.html'));
 gmApp.get('/status', page('status.html'));
 gmApp.get('/assist', page('assist.html')); // prep-time AI campaign assistant (GM only, needs internet)
 
+// Per-game uploaded art (maps/tokens) — served from the active campaign's folder.
+gmApp.get('/assets/maps/:name', gameAsset('maps'));
+gmApp.get('/assets/tokens/:name', gameAsset('tokens'));
+
 // Token art upload: also available on the GM port so the GM can upload token art
 // from port 3001 without needing to switch to the player port.
 gmApp.post('/upload/token',
@@ -161,7 +188,7 @@ gmApp.post('/upload/token',
     if (!ext) return res.status(400).json({ error: `unsupported image type ${req.headers['content-type']}` });
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'empty upload' });
     const name = `token-${Date.now()}.${ext}`;
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'tokens', name), req.body);
+    fs.writeFileSync(path.join(store.gameAssetDir('tokens'), name), req.body);
     log(`token art uploaded (GM port): ${name} (${req.body.length} bytes)`);
     res.json({ art: `/assets/tokens/${name}` });
   });
@@ -180,7 +207,7 @@ gmApp.post('/upload/map',
       return res.status(400).json({ error: 'w and h query params must be the image pixel dimensions' });
     }
     const name = `map-${Date.now()}.${ext}`;
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'assets', 'maps', name), req.body);
+    fs.writeFileSync(path.join(store.gameAssetDir('maps'), name), req.body);
     log(`map uploaded: ${name} (${w}x${h}, ${req.body.length} bytes)`);
     res.json({ image_path: `/assets/maps/${name}`, image_w: w, image_h: h });
   });

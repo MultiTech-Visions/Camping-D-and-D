@@ -141,6 +141,15 @@
     <p class="muted small">Built a story arc offline in the <a href="/builder.html" download>Story Arc Builder</a>?
       Pick the exported <code>.json</code> here to turn it into cards — every image request runs
       through the art generator (the image queue) as it imports. Needs internet.</p>
+    <div class="btn-row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:6px">Import into
+        <select id="import-game"></select>
+      </label>
+      <input type="text" id="import-new-name" placeholder="New campaign name…" style="display:none;min-width:200px">
+    </div>
+    <p class="muted small">Have several files for the same campaign? Pick that campaign here and import each
+      one — they all stack into it. Choose <em>＋ New campaign…</em> to start a fresh one. Importing
+      makes that campaign the live game.</p>
     <div class="btn-row">
       <input type="file" id="import-file" accept=".json,application/json" style="display:none">
       <button class="primary" id="import-pick">Choose a prep pack…</button>

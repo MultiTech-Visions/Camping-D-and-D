@@ -4,7 +4,8 @@
 // truth: clients request changes, ops here validate + mutate + persist, then
 // ws.js broadcasts. Every op throws RuleError on bad input — no silent defaults.
 
-const { db, stmts } = require('./db');
+const dbApi = require('./db');
+const { stmts, transaction } = dbApi;
 const config = require('./config');
 const R = require('./rules');
 const mushroom = require('./mushroom');
@@ -781,7 +782,7 @@ const ops = {
       ? [...state.characters.values()].filter((c) => c.system === 'campfire')
       : [getChar(p.char_id)];
     const n = state.game.reward_every_n_encounters;
-    const tx = db.transaction(() => {
+    const tx = transaction(() => {
       for (const c of targets) {
         if (c.system !== 'campfire') continue;
         c.drain = zeroDrain();
@@ -995,6 +996,50 @@ const ops = {
     R.assertIntIn(p.reward_every_n_encounters, 1, 99, 'reward_every_n_encounters');
     state.game.reward_every_n_encounters = p.reward_every_n_encounters;
     stmts.updateGame.run(state.game);
+  },
+
+  // --- Games (campaign library) ---------------------------------------------
+  // Each game is its own isolated SQLite file under data/games/<slug>/. These
+  // ops manage that library and switch which campaign is live. ws.js broadcasts
+  // fresh snapshots right after every op, so on a switch every connected
+  // screen swaps to the new campaign at once. Only the GM screen exposes these.
+  'game.list'() {
+    return { games: dbApi.listGames(), active_game: dbApi.getActiveGame() };
+  },
+  // Create a fresh empty campaign. Pass switch_to:true to make it live now —
+  // handy for the import flow, which creates a game then imports into it.
+  'game.create'(p) {
+    const name = R.assertNonEmptyString(p.name, 'name');
+    const entry = dbApi.createGame(name);
+    if (p.switch_to) ops['game.switch']({ id: entry.id });
+    return { created_game: entry.id, game: entry };
+  },
+  // Swap the active campaign: flush the outgoing game's runtime bundle, re-open
+  // the connection on the new file (rebuilds the prepared statements in place),
+  // then reload all in-memory state from it.
+  'game.switch'(p) {
+    const id = R.assertNonEmptyString(p.id, 'id');
+    if (!dbApi.listGames().some((g) => g.id === id)) {
+      throw Object.assign(new Error(`no such game '${id}'`), { expected: true });
+    }
+    if (id === dbApi.getActiveGame()) return { active_game: id };
+    persistRuntime();
+    dbApi.setActiveGame(id);
+    dbApi.openGame(id);
+    load();
+    return { active_game: id };
+  },
+  'game.rename'(p) {
+    const id = R.assertNonEmptyString(p.id, 'id');
+    const name = R.assertNonEmptyString(p.name, 'name');
+    return { game: dbApi.renameGame(id, name) };
+  },
+  // Delete a campaign and its files. db.deleteGame refuses the active or the
+  // last remaining game, so the GM must switch away first.
+  'game.delete'(p) {
+    const id = R.assertNonEmptyString(p.id, 'id');
+    dbApi.deleteGame(id);
+    return { deleted_game: id };
   },
 
   // Mushroom lamp on/off. Memory-only (hardware state, not persisted): spawns /
@@ -1751,6 +1796,10 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
       cards: JSON.parse(JSON.stringify([...state.cards.values()])),
       revealed_card_id: state.game.revealed_card_id,
       revealed_card: publicRevealedCard(),
+      // Campaign ("Games") library — GM-only. Lets the GM screen render the
+      // switcher and show which campaign is live.
+      games: dbApi.listGames(),
+      active_game: dbApi.getActiveGame(),
       connected_device_ids: connectedDeviceIds,
       // Every known device (named or not) plus any connected ones, with names + online flag.
       devices: [...new Set([...state.devices.keys(), ...connectedDeviceIds])].map((id) => ({
@@ -1782,6 +1831,8 @@ function snapshotFor(role, charId, deviceId, connectedDeviceIds = []) {
     characters: chars.map((c) => publicCharacter(c, { includeHiddenDesire: false, includeSecretConditions: false })),
     clocks: clocks.filter((c) => c.visibility === 'visible').map(({ note, ...c }) => c),
     revealed_card: publicRevealedCard(),
+    // the live campaign's name, shown as the projector's title
+    campaign_name: (dbApi.listGames().find((g) => g.id === dbApi.getActiveGame()) || {}).name || '',
   };
 }
 
