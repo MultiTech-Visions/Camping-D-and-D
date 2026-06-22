@@ -11,6 +11,10 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Python bytecode cache (scripts/)
+__pycache__/
+*.pyc
+
 # Uploaded battle maps / token art are game content, not code
 public/assets/maps/*
 public/assets/tokens/*
